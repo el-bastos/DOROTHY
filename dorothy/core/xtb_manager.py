@@ -65,6 +65,30 @@ def get_xtb_executable() -> Optional[Path]:
     if xtb_in_path:
         return Path(xtb_in_path)
 
+    # Check common installation locations (PATH may not be set in GUI apps)
+    common_locations = []
+    if platform.system() == "Darwin":
+        # Homebrew locations
+        common_locations = [
+            Path("/opt/homebrew/bin/xtb"),  # Apple Silicon
+            Path("/usr/local/bin/xtb"),      # Intel Mac
+            Path.home() / "miniconda3" / "bin" / "xtb",
+            Path.home() / "anaconda3" / "bin" / "xtb",
+            Path.home() / "miniforge3" / "bin" / "xtb",
+        ]
+    elif platform.system() == "Linux":
+        common_locations = [
+            Path("/usr/local/bin/xtb"),
+            Path("/usr/bin/xtb"),
+            Path.home() / "miniconda3" / "bin" / "xtb",
+            Path.home() / "anaconda3" / "bin" / "xtb",
+            Path.home() / "miniforge3" / "bin" / "xtb",
+        ]
+
+    for loc in common_locations:
+        if loc.exists():
+            return loc
+
     return None
 
 
@@ -220,14 +244,17 @@ def run_xtb_density(
     xyz_file = output_dir / "molecule.xyz"
     write_xyz_file(structure, xyz_file)
 
+    # Write xTB input file to request density cube output
+    input_file = output_dir / "xtb.inp"
+    input_file.write_text("$write\n   density=true\n$end\n")
+
     if progress_callback:
         progress_callback("Running xTB calculation...")
 
     try:
-        # Run xTB with density output
-        # --cube generates electron density cube file
+        # Run xTB with density output via input file
         result = subprocess.run(
-            [str(exe), str(xyz_file), "--gfn", "2", "--cube"],
+            [str(exe), str(xyz_file), "--gfn", "2", "--input", str(input_file)],
             cwd=output_dir,
             capture_output=True,
             text=True,
@@ -238,15 +265,16 @@ def run_xtb_density(
             print(f"xTB error: {result.stderr}")
             return None
 
-        # xTB outputs density.cub
+        # xTB outputs density.cub when density=true is set
         cube_file = output_dir / "density.cub"
         if cube_file.exists():
             return cube_file
 
-        # Alternative name
-        cube_file = output_dir / "xtb_density.cub"
-        if cube_file.exists():
-            return cube_file
+        # Check for other possible cube file names
+        for pattern in ["*.cub", "*.cube"]:
+            cubes = list(output_dir.glob(pattern))
+            if cubes:
+                return cubes[0]
 
         return None
 
