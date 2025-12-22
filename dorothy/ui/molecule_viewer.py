@@ -1,0 +1,166 @@
+"""
+2D Molecule viewer widget using matplotlib.
+"""
+
+import numpy as np
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSizePolicy
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+
+from dorothy.core.cif_parser import MoleculeStructure
+
+
+# Element colors (CPK coloring scheme)
+ELEMENT_COLORS = {
+    'H': '#FFFFFF',
+    'C': '#909090',
+    'N': '#3050F8',
+    'O': '#FF0D0D',
+    'S': '#FFFF30',
+    'P': '#FF8000',
+    'F': '#90E050',
+    'Cl': '#1FF01F',
+    'Br': '#A62929',
+    'I': '#940094',
+}
+
+# Covalent radii (Å) for bond detection
+COVALENT_RADII = {
+    'H': 0.31,
+    'C': 0.76,
+    'N': 0.71,
+    'O': 0.66,
+    'S': 1.05,
+    'P': 1.07,
+    'F': 0.57,
+    'Cl': 1.02,
+    'Br': 1.20,
+    'I': 1.39,
+}
+
+
+class MoleculeCanvas(FigureCanvas):
+    """Canvas for displaying 2D molecule structure."""
+
+    def __init__(self, parent=None):
+        self.fig = Figure(figsize=(5, 5), dpi=100)
+        self.fig.patch.set_facecolor('#f8f8f8')
+        self.ax = self.fig.add_subplot(111)
+        super().__init__(self.fig)
+        self.setParent(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        self._structure = None
+        self._clear_plot()
+
+    def _clear_plot(self):
+        """Clear the plot."""
+        self.ax.clear()
+        self.ax.set_aspect('equal')
+        self.ax.axis('off')
+        self.fig.tight_layout()
+
+    def set_structure(self, structure: MoleculeStructure):
+        """Display a molecule structure."""
+        self._structure = structure
+        self._draw_molecule()
+
+    def _draw_molecule(self):
+        """Draw the molecule structure."""
+        self._clear_plot()
+
+        if not self._structure or not self._structure.atoms:
+            self.ax.text(0.5, 0.5, 'No structure data',
+                        ha='center', va='center', transform=self.ax.transAxes,
+                        fontsize=12, color='#888')
+            self.draw()
+            return
+
+        # Get Cartesian coordinates
+        coords = self._structure.get_cartesian_coords()
+        symbols = self._structure.get_symbols()
+
+        if len(coords) == 0:
+            return
+
+        # Project to 2D (use x, y coordinates - top-down view)
+        # Could add rotation controls later
+        x = coords[:, 0]
+        y = coords[:, 1]
+
+        # Center the molecule
+        x = x - np.mean(x)
+        y = y - np.mean(y)
+
+        # Find bonds based on distance
+        bonds = self._find_bonds(coords, symbols)
+
+        # Draw bonds first (so they're behind atoms)
+        for i, j in bonds:
+            self.ax.plot([x[i], x[j]], [y[i], y[j]],
+                        color='#404040', linewidth=2, zorder=1)
+
+        # Draw atoms
+        for idx, (xi, yi, sym) in enumerate(zip(x, y, symbols)):
+            color = ELEMENT_COLORS.get(sym, '#808080')
+            # Size based on element (H smaller)
+            size = 150 if sym == 'H' else 300
+
+            # Draw atom circle
+            self.ax.scatter(xi, yi, s=size, c=color, edgecolors='#404040',
+                           linewidths=1, zorder=2)
+
+            # Label (skip H for cleaner view)
+            if sym != 'H':
+                self.ax.annotate(sym, (xi, yi), ha='center', va='center',
+                               fontsize=8, fontweight='bold', zorder=3)
+
+        # Set axis limits with padding
+        padding = 1.0
+        self.ax.set_xlim(x.min() - padding, x.max() + padding)
+        self.ax.set_ylim(y.min() - padding, y.max() + padding)
+
+        self.fig.tight_layout()
+        self.draw()
+
+    def _find_bonds(self, coords: np.ndarray, symbols: list[str]) -> list[tuple[int, int]]:
+        """Find bonds based on interatomic distances."""
+        bonds = []
+        n_atoms = len(symbols)
+
+        for i in range(n_atoms):
+            for j in range(i + 1, n_atoms):
+                # Calculate distance
+                dist = np.linalg.norm(coords[i] - coords[j])
+
+                # Get covalent radii
+                r1 = COVALENT_RADII.get(symbols[i], 1.5)
+                r2 = COVALENT_RADII.get(symbols[j], 1.5)
+
+                # Bond if distance < sum of covalent radii + tolerance
+                max_bond_dist = (r1 + r2) * 1.3  # 30% tolerance
+                if dist < max_bond_dist:
+                    bonds.append((i, j))
+
+        return bonds
+
+
+class MoleculeViewer(QWidget):
+    """Widget for viewing molecule structures."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.canvas = MoleculeCanvas(self)
+        layout.addWidget(self.canvas)
+
+    def set_structure(self, structure: MoleculeStructure):
+        """Display a molecule structure."""
+        self.canvas.set_structure(structure)
+
+    def clear(self):
+        """Clear the viewer."""
+        self.canvas._clear_plot()
+        self.canvas.draw()
