@@ -139,7 +139,8 @@ def parse_cube_file(filepath: Path) -> Optional[DensityCube]:
 
 
 def calculate_promolecule_density(
-    structure: MoleculeStructure,
+    coords: np.ndarray,
+    symbols: list[str],
     grid_origin: np.ndarray,
     grid_axes: np.ndarray,
     grid_shape: tuple[int, int, int],
@@ -148,7 +149,8 @@ def calculate_promolecule_density(
     Calculate promolecule density (sum of spherical atomic densities).
 
     Args:
-        structure: Molecule structure
+        coords: Atomic coordinates in Angstrom (N x 3)
+        symbols: Element symbols for each atom
         grid_origin: Origin of the grid (Bohr)
         grid_axes: Axis vectors (Bohr)
         grid_shape: Number of grid points (nx, ny, nz)
@@ -156,8 +158,6 @@ def calculate_promolecule_density(
     Returns:
         3D array of promolecule density
     """
-    coords = structure.get_cartesian_coords()  # Angstrom
-    symbols = structure.get_symbols()
 
     # Convert to Bohr
     coords_bohr = coords / 0.529177
@@ -200,8 +200,13 @@ def calculate_deformation_density(
     Returns:
         Deformation density cube
     """
+    # Note: For deformation density, we use the xTB grid which has its own
+    # coordinate system. The structure coords should match the xTB input.
+    coords = structure.get_cartesian_coords(align_to_principal_axes=False)
+    symbols = structure.get_symbols()
     promolecule = calculate_promolecule_density(
-        structure,
+        coords,
+        symbols,
         molecular_density.origin,
         molecular_density.axes,
         molecular_density.shape,
@@ -226,6 +231,7 @@ def calculate_deformation_density(
 def create_density_cube_from_structure(
     structure: MoleculeStructure,
     resolution: str = "medium",
+    align_to_principal_axes: bool = True,
 ) -> DensityCube:
     """
     Create a promolecule density cube directly from structure.
@@ -235,11 +241,13 @@ def create_density_cube_from_structure(
     Args:
         structure: Molecule structure
         resolution: "coarse", "medium", or "fine"
+        align_to_principal_axes: If True, rotate molecule so Z-slicing
+            cuts parallel to the molecular plane (recommended for visualization)
 
     Returns:
         DensityCube with promolecule density
     """
-    coords = structure.get_cartesian_coords()
+    coords = structure.get_cartesian_coords(align_to_principal_axes=align_to_principal_axes)
 
     # Determine grid bounds (add padding)
     padding = 3.0  # Angstrom
@@ -261,8 +269,10 @@ def create_density_cube_from_structure(
     axes = np.diag([spacing_bohr, spacing_bohr, spacing_bohr])
 
     # Calculate promolecule density
+    symbols = structure.get_symbols()
     density = calculate_promolecule_density(
-        structure,
+        coords,
+        symbols,
         origin_bohr,
         axes,
         tuple(n_points),

@@ -15,6 +15,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 - **CIF Parser** - Extracts atomic coordinates, cell parameters, space groups
 - **2D Molecule Viewer** - Bond detection, CPK coloring
 - **Generation Pipeline** - Promolecule density calculation, contour slicing, PDF export
+- **Principal Axes Alignment** - Molecules auto-rotated for optimal slicing orientation
 - **xTB Manager** - Auto-download infrastructure (macOS, Linux, Windows)
 - **i18n Ready** - Qt translation system in place (English only for now)
 
@@ -22,7 +23,6 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 
 - xTB download dialog (infrastructure exists, UI prompt not wired)
 - Deformation density (requires xTB - currently promolecule only)
-- Principal axes alignment for optimal slicing orientation
 - Slice preview in completion screen
 - Settings persistence
 - App packaging (PyInstaller/cx_Freeze)
@@ -123,19 +123,18 @@ The app auto-discovers these on startup.
 ### High Priority
 1. Wire up xTB download dialog on first generation attempt
 2. Test full pipeline with xTB for deformation density
-3. Add molecule orientation (principal axes alignment)
-4. Improve contour level selection for cleaner output
+3. Improve contour level selection for cleaner output
 
 ### Medium Priority
-5. Add more bundled example molecules
-6. Slice preview in completion screen
-7. Settings persistence (QSettings)
-8. ZIP export option
+4. Add more bundled example molecules
+5. Slice preview in completion screen
+6. Settings persistence (QSettings)
+7. ZIP export option
 
 ### Future
-9. App packaging for distribution (macOS .dmg, Windows .exe, Linux AppImage)
-10. Additional languages (Portuguese, Spanish)
-11. Unit tests
+8. App packaging for distribution (macOS .dmg, Windows .exe, Linux AppImage)
+9. Additional languages (Portuguese, Spanish)
+10. Unit tests
 
 ---
 

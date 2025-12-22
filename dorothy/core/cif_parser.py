@@ -70,14 +70,67 @@ class MoleculeStructure:
     def atom_count(self) -> int:
         return len(self.atoms)
 
-    def get_cartesian_coords(self) -> np.ndarray:
-        """Get Cartesian coordinates for all atoms."""
+    def get_cartesian_coords(self, align_to_principal_axes: bool = False) -> np.ndarray:
+        """
+        Get Cartesian coordinates for all atoms.
+
+        Args:
+            align_to_principal_axes: If True, rotate molecule so that:
+                - The molecular plane lies in the XY plane
+                - The longest axis is along X
+                - Z-slicing will cut parallel to the molecular plane
+        """
         if not self.atoms:
             return np.array([])
 
         frac_coords = np.array([[a.x, a.y, a.z] for a in self.atoms])
         matrix = self.cell.to_cartesian_matrix()
-        return frac_coords @ matrix.T
+        coords = frac_coords @ matrix.T
+
+        if align_to_principal_axes:
+            coords = self._align_to_principal_axes(coords)
+
+        return coords
+
+    def _align_to_principal_axes(self, coords: np.ndarray) -> np.ndarray:
+        """
+        Rotate coordinates to align with principal axes.
+
+        Uses SVD to find the best-fit plane and orients the molecule so:
+        - XY plane contains the molecular plane (maximum spread)
+        - Z axis is perpendicular to the molecular plane (minimum spread)
+        - X axis is along the longest dimension
+        """
+        # Center the molecule
+        center = coords.mean(axis=0)
+        centered = coords - center
+
+        # SVD gives principal axes
+        # U: left singular vectors (not used)
+        # s: singular values (spread along each axis)
+        # Vh: right singular vectors (principal directions)
+        _, s, vh = np.linalg.svd(centered)
+
+        # vh rows are principal axes in order of decreasing spread
+        # vh[0] = direction of maximum spread (longest)
+        # vh[1] = direction of medium spread
+        # vh[2] = direction of minimum spread (normal to molecular plane)
+
+        # Build rotation matrix: new axes are the principal axes
+        # We want: X = longest, Y = medium, Z = shortest (plane normal)
+        rotation_matrix = vh  # Each row becomes new axis direction
+
+        # Ensure right-handed coordinate system
+        if np.linalg.det(rotation_matrix) < 0:
+            rotation_matrix[2] = -rotation_matrix[2]
+
+        # Rotate coordinates
+        rotated = centered @ rotation_matrix.T
+
+        # Re-center to positive coordinates (for grid generation)
+        rotated = rotated - rotated.min(axis=0)
+
+        return rotated
 
     def get_symbols(self) -> list[str]:
         """Get list of element symbols."""
