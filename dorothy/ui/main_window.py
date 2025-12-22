@@ -23,6 +23,8 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QFileDialog,
     QMessageBox,
+    QDialog,
+    QDialogButtonBox,
 )
 from PyQt6.QtCore import Qt, QCoreApplication, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QDesktopServices
@@ -31,6 +33,7 @@ from PyQt6.QtCore import QUrl
 from dorothy.core.cod_search import CODSearch, MoleculeResult
 from dorothy.core.cif_parser import MoleculeStructure
 from dorothy.core.generator import GenerationPipeline, GenerationSettings, GenerationResult
+from dorothy.core.xtb_manager import is_xtb_installed, download_xtb, get_download_url, get_xtb_install_instructions
 from dorothy.ui.molecule_viewer import MoleculeViewer
 
 
@@ -65,6 +68,164 @@ class GenerationWorker(QThread):
         )
         result = pipeline.generate(self.structure, self.output_dir, self.settings)
         self.finished.emit(result)
+
+
+class XtbDownloadWorker(QThread):
+    """Background thread for xTB download."""
+    progress = pyqtSignal(int, int)  # downloaded, total
+    finished = pyqtSignal(bool)  # success
+
+    def run(self):
+        success = download_xtb(
+            progress_callback=lambda downloaded, total: self.progress.emit(downloaded, total)
+        )
+        self.finished.emit(success)
+
+
+class XtbDownloadDialog(QDialog):
+    """Dialog for downloading/installing xTB."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Install xTB")
+        self.setMinimumWidth(450)
+        self.setModal(True)
+
+        self.download_worker = None
+        self.can_auto_download = get_download_url() is not None
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(15)
+
+        # Title
+        title = QLabel("xTB Not Installed")
+        title_font = QFont()
+        title_font.setPointSize(14)
+        title_font.setBold(True)
+        title.setFont(title_font)
+        layout.addWidget(title)
+
+        # Explanation
+        explanation = QLabel(
+            "xTB is required for deformation density calculation.\n\n"
+            "Without xTB, only promolecule density (atomic positions) "
+            "will be generated. With xTB, you also get deformation density "
+            "showing chemical bonding."
+        )
+        explanation.setWordWrap(True)
+        explanation.setStyleSheet("color: #666;")
+        layout.addWidget(explanation)
+
+        # Installation instructions
+        instructions = get_xtb_install_instructions()
+        install_label = QLabel(instructions)
+        install_label.setWordWrap(True)
+        install_label.setStyleSheet(
+            "background-color: #f5f5f5; padding: 10px; "
+            "font-family: monospace; border-radius: 4px;"
+        )
+        install_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(install_label)
+
+        # Progress bar (for auto-download, hidden initially)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMinimum(0)
+        self.progress_bar.setMaximum(100)
+        self.progress_bar.hide()
+        layout.addWidget(self.progress_bar)
+
+        # Status label
+        self.status_label = QLabel()
+        self.status_label.setStyleSheet("color: #666;")
+        self.status_label.hide()
+        layout.addWidget(self.status_label)
+
+        # Buttons
+        button_layout = QHBoxLayout()
+
+        self.skip_btn = QPushButton("Skip (Promolecule Only)")
+        self.skip_btn.clicked.connect(self.reject)
+        button_layout.addWidget(self.skip_btn)
+
+        if self.can_auto_download:
+            self.download_btn = QPushButton("Download xTB")
+            self.download_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #2563eb;
+                    color: white;
+                    font-weight: bold;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background-color: #1d4ed8;
+                }
+            """)
+            self.download_btn.clicked.connect(self._start_download)
+            button_layout.addWidget(self.download_btn)
+        else:
+            # No auto-download available, just show "I've Installed It" button
+            self.check_btn = QPushButton("I've Installed It")
+            self.check_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #2563eb;
+                    color: white;
+                    font-weight: bold;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background-color: #1d4ed8;
+                }
+            """)
+            self.check_btn.clicked.connect(self._check_installation)
+            button_layout.addWidget(self.check_btn)
+
+        layout.addLayout(button_layout)
+
+    def _check_installation(self):
+        """Check if user has installed xTB."""
+        if is_xtb_installed():
+            self.accept()
+        else:
+            self.status_label.show()
+            self.status_label.setText("xTB not found. Please install it and try again.")
+            self.status_label.setStyleSheet("color: #dc2626;")
+
+    def _start_download(self):
+        """Start the xTB download."""
+        self.download_btn.setEnabled(False)
+        self.skip_btn.setEnabled(False)
+        self.progress_bar.show()
+        self.progress_bar.setValue(0)
+        self.status_label.show()
+        self.status_label.setText("Downloading...")
+
+        self.download_worker = XtbDownloadWorker()
+        self.download_worker.progress.connect(self._on_progress)
+        self.download_worker.finished.connect(self._on_finished)
+        self.download_worker.start()
+
+    def _on_progress(self, downloaded: int, total: int):
+        """Handle download progress."""
+        if total > 0:
+            percent = int(100 * downloaded / total)
+            self.progress_bar.setValue(percent)
+            mb_downloaded = downloaded / (1024 * 1024)
+            mb_total = total / (1024 * 1024)
+            self.status_label.setText(f"Downloading... {mb_downloaded:.1f} / {mb_total:.1f} MB")
+
+    def _on_finished(self, success: bool):
+        """Handle download completion."""
+        if success:
+            self.status_label.setText("Download complete!")
+            self.status_label.setStyleSheet("color: #16a34a;")
+            self.accept()
+        else:
+            self.status_label.setText("Download failed. Please install manually.")
+            self.status_label.setStyleSheet("color: #dc2626;")
+            self.download_btn.setEnabled(True)
+            self.skip_btn.setEnabled(True)
 
 
 class MainWindow(QMainWindow):
@@ -571,6 +732,20 @@ class MainWindow(QMainWindow):
         if not self.selected_structure:
             QMessageBox.warning(self, "Error", "No molecule structure available.")
             return
+
+        # Check if xTB is needed and not installed
+        wants_deformation = self.deformation_check.isChecked()
+        if wants_deformation and not is_xtb_installed():
+            # Show install dialog
+            dialog = XtbDownloadDialog(self)
+            result = dialog.exec()
+
+            if result == QDialog.DialogCode.Rejected:
+                # User chose to skip - disable deformation
+                self.deformation_check.setChecked(False)
+            elif not is_xtb_installed():
+                # Installation not complete
+                self.deformation_check.setChecked(False)
 
         # Ask for output directory
         default_name = self.selected_molecule.name.lower().replace(' ', '_')

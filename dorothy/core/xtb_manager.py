@@ -49,6 +49,7 @@ def get_xtb_dir() -> Path:
 
 def get_xtb_executable() -> Optional[Path]:
     """Get path to xTB executable if installed."""
+    # First check our managed installation
     xtb_dir = get_xtb_dir()
 
     if platform.system() == "Windows":
@@ -58,12 +59,46 @@ def get_xtb_executable() -> Optional[Path]:
 
     if exe.exists():
         return exe
+
+    # Check if xTB is in PATH (homebrew, conda, etc.)
+    xtb_in_path = shutil.which("xtb")
+    if xtb_in_path:
+        return Path(xtb_in_path)
+
     return None
 
 
 def is_xtb_installed() -> bool:
     """Check if xTB is installed."""
     return get_xtb_executable() is not None
+
+
+def get_xtb_install_instructions() -> str:
+    """Get platform-specific installation instructions."""
+    system = platform.system()
+
+    if system == "Darwin":
+        return (
+            "xTB can be installed via Homebrew:\n\n"
+            "  brew tap grimme-lab/qc\n"
+            "  brew install xtb\n\n"
+            "Or via conda:\n\n"
+            "  conda install -c conda-forge xtb"
+        )
+    elif system == "Linux":
+        return (
+            "xTB can be installed via conda:\n\n"
+            "  conda install -c conda-forge xtb\n\n"
+            "Or download from GitHub releases."
+        )
+    elif system == "Windows":
+        return (
+            "xTB can be installed via conda:\n\n"
+            "  conda install -c conda-forge xtb\n\n"
+            "Or download from GitHub releases."
+        )
+    else:
+        return "Please install xTB from https://github.com/grimme-lab/xtb"
 
 
 def get_download_url() -> Optional[str]:
