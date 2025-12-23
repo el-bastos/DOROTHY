@@ -6,7 +6,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 
 ## Current Status
 
-**Version:** 0.3.7 (Development)
+**Version:** 0.3.8 (Development)
 
 ### What's Working
 
@@ -194,6 +194,16 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 ---
 
 ## Changelog
+
+### v0.3.8 (December 2024)
+- **Improved 3D Explorer UI**: Reorganized into cleaner two-row layout
+  - Row 1: View options (density type, color mode, display toggles, spacing)
+  - Row 2: Navigation controls (slice slider, zoom, rotation, reset)
+- **Z-coordinate display**: Slice label now shows position in Angstroms (e.g., "8/15 (z=1.2Å)")
+- **Color mode toggle buttons**: Replaced dropdown with B&W/Color toggle buttons
+- **Reset View button**: Single button resets both zoom and rotation to defaults
+- **Tooltips everywhere**: All controls now have helpful tooltips
+- Renamed confusing "Contours" slider to "Spacing"
 
 ### v0.3.7 (December 2024)
 - **Single Slice Toggle**: New checkbox in 3D view to show only the selected slice, hiding all other planes and contours

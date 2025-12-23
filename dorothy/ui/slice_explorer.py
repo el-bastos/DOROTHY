@@ -8,7 +8,8 @@ Supports atom picking for plane definition, zoom controls, and bond visualizatio
 import numpy as np
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSlider, QLabel,
-    QPushButton, QComboBox, QCheckBox, QSizePolicy
+    QPushButton, QComboBox, QCheckBox, QSizePolicy, QButtonGroup,
+    QFrame
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -571,6 +572,21 @@ class SliceExplorerCanvas(FigureCanvas):
         self._zoom_level = 1.0
         self._apply_zoom()
 
+    def reset_view(self):
+        """Reset zoom and rotation to defaults."""
+        self._zoom_level = 1.0
+        self.ax.view_init(elev=25, azim=-60)
+        self._apply_zoom()
+
+    def get_slice_z_coord(self, slice_index: int) -> float | None:
+        """Get the Z-coordinate (in Å) for a given slice index."""
+        if not self._density_cube:
+            return None
+        slices = self._density_cube.get_z_slices(self._n_slices)
+        if not slices or slice_index >= len(slices):
+            return None
+        return slices[slice_index][0]
+
     def rotate_left(self):
         """Rotate view left by 15 degrees."""
         elev, azim = self.ax.elev, self.ax.azim
@@ -641,179 +657,208 @@ class SliceExplorer(QWidget):
         self._setup_ui()
 
     def _setup_ui(self):
-        """Set up the widget UI."""
+        """Set up the widget UI with a cleaner two-row layout."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
 
         # 3D Canvas
         self.canvas = SliceExplorerCanvas(self)
         self.canvas.setMinimumSize(400, 400)
         layout.addWidget(self.canvas, stretch=1)
 
-        # Controls
-        controls = QHBoxLayout()
-        controls.setSpacing(15)
+        # === ROW 1: View Options ===
+        row1 = QHBoxLayout()
+        row1.setSpacing(20)
 
         # Density type selector
-        type_group = QVBoxLayout()
+        type_group = QHBoxLayout()
+        type_group.setSpacing(6)
         type_label = QLabel("Density:")
-        type_label.setStyleSheet("font-weight: bold; font-size: 10pt;")
+        type_label.setStyleSheet("font-weight: bold;")
+        type_label.setToolTip("Switch between promolecule and deformation density")
         type_group.addWidget(type_label)
-
         self.density_combo = QComboBox()
         self.density_combo.addItems(["Promolecule", "Deformation"])
+        self.density_combo.setToolTip("Promolecule: atom positions | Deformation: bonding effects")
         self.density_combo.currentIndexChanged.connect(self._on_density_type_changed)
         type_group.addWidget(self.density_combo)
-        controls.addLayout(type_group)
+        row1.addLayout(type_group)
 
-        # Slice slider
-        slider_group = QVBoxLayout()
-        slider_label = QLabel("Slice:")
-        slider_label.setStyleSheet("font-weight: bold; font-size: 10pt;")
-        slider_group.addWidget(slider_label)
+        # Color mode toggle buttons
+        color_group = QHBoxLayout()
+        color_group.setSpacing(2)
+        self.bw_btn = QPushButton("B&&W")
+        self.bw_btn.setCheckable(True)
+        self.bw_btn.setChecked(True)
+        self.bw_btn.setToolTip("Black and white contours")
+        self.bw_btn.setMaximumWidth(45)
+        self.color_btn = QPushButton("Color")
+        self.color_btn.setCheckable(True)
+        self.color_btn.setToolTip("Colored contours (blue=positive, red=negative)")
+        self.color_btn.setMaximumWidth(50)
+        # Button group for exclusive selection
+        self.color_button_group = QButtonGroup(self)
+        self.color_button_group.addButton(self.bw_btn, 0)
+        self.color_button_group.addButton(self.color_btn, 1)
+        self.color_button_group.idClicked.connect(self._on_color_mode_changed)
+        color_group.addWidget(self.bw_btn)
+        color_group.addWidget(self.color_btn)
+        row1.addLayout(color_group)
 
-        slider_row = QHBoxLayout()
-        self.slice_slider = QSlider(Qt.Orientation.Horizontal)
-        self.slice_slider.setMinimum(0)
-        self.slice_slider.setMaximum(14)
-        self.slice_slider.setValue(7)
-        self.slice_slider.setMinimumWidth(100)
-        self.slice_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self.slice_slider.setTickInterval(1)
-        self.slice_slider.valueChanged.connect(self._on_slice_changed)
-        slider_row.addWidget(self.slice_slider, stretch=1)
+        # Separator
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.Shape.VLine)
+        sep1.setFrameShadow(QFrame.Shadow.Sunken)
+        row1.addWidget(sep1)
 
-        self.slice_label = QLabel("8/15")
-        self.slice_label.setMinimumWidth(45)
-        self.slice_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        slider_row.addWidget(self.slice_label)
-        slider_group.addLayout(slider_row)
-        controls.addLayout(slider_group, stretch=1)
-
-        # Color mode
-        color_group = QVBoxLayout()
-        color_label = QLabel("Color:")
-        color_label.setStyleSheet("font-weight: bold; font-size: 10pt;")
-        color_group.addWidget(color_label)
-
-        self.color_combo = QComboBox()
-        self.color_combo.addItems(["B&W", "Color"])
-        self.color_combo.currentIndexChanged.connect(self._on_color_mode_changed)
-        color_group.addWidget(self.color_combo)
-        controls.addLayout(color_group)
-
-        # Contours toggle
-        contour_group = QVBoxLayout()
-        contour_label = QLabel("Display:")
-        contour_label.setStyleSheet("font-weight: bold; font-size: 10pt;")
-        contour_group.addWidget(contour_label)
-
+        # Display options (checkboxes)
         self.contours_check = QCheckBox("Contours")
         self.contours_check.setChecked(True)
+        self.contours_check.setToolTip("Show/hide contour lines")
         self.contours_check.stateChanged.connect(self._on_contours_toggled)
-        contour_group.addWidget(self.contours_check)
+        row1.addWidget(self.contours_check)
 
         self.bonds_check = QCheckBox("Bonds")
         self.bonds_check.setChecked(True)
+        self.bonds_check.setToolTip("Show/hide molecular bonds")
         self.bonds_check.stateChanged.connect(self._on_bonds_toggled)
-        contour_group.addWidget(self.bonds_check)
+        row1.addWidget(self.bonds_check)
 
-        self.density_info_check = QCheckBox("Density Info")
-        self.density_info_check.setChecked(False)
-        self.density_info_check.setToolTip("Show electron density statistics")
-        self.density_info_check.stateChanged.connect(self._on_density_info_toggled)
-        contour_group.addWidget(self.density_info_check)
-
-        self.single_slice_check = QCheckBox("Single Slice")
+        self.single_slice_check = QCheckBox("Single")
         self.single_slice_check.setChecked(False)
         self.single_slice_check.setToolTip("Show only the selected slice, hide all others")
         self.single_slice_check.stateChanged.connect(self._on_single_slice_toggled)
-        contour_group.addWidget(self.single_slice_check)
-        controls.addLayout(contour_group)
+        row1.addWidget(self.single_slice_check)
 
-        # Contour scale slider
-        contour_scale_group = QVBoxLayout()
-        contour_scale_label = QLabel("Contours:")
-        contour_scale_label.setStyleSheet("font-weight: bold; font-size: 10pt;")
-        contour_scale_group.addWidget(contour_scale_label)
+        self.density_info_check = QCheckBox("Info")
+        self.density_info_check.setChecked(False)
+        self.density_info_check.setToolTip("Show electron density statistics")
+        self.density_info_check.stateChanged.connect(self._on_density_info_toggled)
+        row1.addWidget(self.density_info_check)
 
-        contour_row = QHBoxLayout()
+        # Separator
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.VLine)
+        sep2.setFrameShadow(QFrame.Shadow.Sunken)
+        row1.addWidget(sep2)
+
+        # Contour spacing slider
+        spacing_group = QHBoxLayout()
+        spacing_group.setSpacing(4)
+        spacing_label = QLabel("Spacing:")
+        spacing_label.setToolTip("Adjust contour level spacing")
+        spacing_group.addWidget(spacing_label)
         self.contour_scale_slider = QSlider(Qt.Orientation.Horizontal)
         self.contour_scale_slider.setMinimum(25)  # 0.25x
         self.contour_scale_slider.setMaximum(200)  # 2.0x
         self.contour_scale_slider.setValue(100)  # 1.0x (default)
-        self.contour_scale_slider.setMinimumWidth(80)
-        self.contour_scale_slider.setToolTip("Adjust contour spacing: left=tighter, right=looser")
+        self.contour_scale_slider.setFixedWidth(80)
+        self.contour_scale_slider.setToolTip("Left = more contours (tighter), Right = fewer contours (looser)")
         self.contour_scale_slider.valueChanged.connect(self._on_contour_scale_changed)
-        contour_row.addWidget(self.contour_scale_slider)
-
+        spacing_group.addWidget(self.contour_scale_slider)
         self.contour_scale_label = QLabel("1.0x")
-        self.contour_scale_label.setMinimumWidth(35)
-        self.contour_scale_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        contour_row.addWidget(self.contour_scale_label)
-        contour_scale_group.addLayout(contour_row)
-        controls.addLayout(contour_scale_group)
+        self.contour_scale_label.setMinimumWidth(30)
+        spacing_group.addWidget(self.contour_scale_label)
+        row1.addLayout(spacing_group)
+
+        row1.addStretch()
+        layout.addLayout(row1)
+
+        # === ROW 2: Navigation Controls ===
+        row2 = QHBoxLayout()
+        row2.setSpacing(20)
+
+        # Slice navigation
+        slice_group = QHBoxLayout()
+        slice_group.setSpacing(6)
+        slice_label = QLabel("Slice:")
+        slice_label.setStyleSheet("font-weight: bold;")
+        slice_label.setToolTip("Navigate through density slices")
+        slice_group.addWidget(slice_label)
+
+        self.slice_slider = QSlider(Qt.Orientation.Horizontal)
+        self.slice_slider.setMinimum(0)
+        self.slice_slider.setMaximum(14)
+        self.slice_slider.setValue(7)
+        self.slice_slider.setMinimumWidth(150)
+        self.slice_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.slice_slider.setTickInterval(1)
+        self.slice_slider.setToolTip("Drag to select slice")
+        self.slice_slider.valueChanged.connect(self._on_slice_changed)
+        slice_group.addWidget(self.slice_slider, stretch=1)
+
+        self.slice_label = QLabel("8/15")
+        self.slice_label.setMinimumWidth(90)
+        self.slice_label.setToolTip("Current slice / total slices (Z-coordinate)")
+        slice_group.addWidget(self.slice_label)
+        row2.addLayout(slice_group, stretch=1)
+
+        # Separator
+        sep3 = QFrame()
+        sep3.setFrameShape(QFrame.Shape.VLine)
+        sep3.setFrameShadow(QFrame.Shadow.Sunken)
+        row2.addWidget(sep3)
 
         # Zoom controls
-        zoom_group = QVBoxLayout()
+        zoom_group = QHBoxLayout()
+        zoom_group.setSpacing(2)
         zoom_label = QLabel("Zoom:")
-        zoom_label.setStyleSheet("font-weight: bold; font-size: 10pt;")
+        zoom_label.setToolTip("Zoom in/out (or use scroll wheel)")
         zoom_group.addWidget(zoom_label)
 
-        zoom_row = QHBoxLayout()
         zoom_in_btn = QPushButton("+")
-        zoom_in_btn.setMaximumWidth(30)
+        zoom_in_btn.setFixedWidth(28)
+        zoom_in_btn.setToolTip("Zoom in")
         zoom_in_btn.clicked.connect(self.canvas.zoom_in)
-        zoom_row.addWidget(zoom_in_btn)
+        zoom_group.addWidget(zoom_in_btn)
 
         zoom_out_btn = QPushButton("-")
-        zoom_out_btn.setMaximumWidth(30)
+        zoom_out_btn.setFixedWidth(28)
+        zoom_out_btn.setToolTip("Zoom out")
         zoom_out_btn.clicked.connect(self.canvas.zoom_out)
-        zoom_row.addWidget(zoom_out_btn)
-
-        zoom_reset_btn = QPushButton("Reset")
-        zoom_reset_btn.clicked.connect(self.canvas.reset_zoom)
-        zoom_row.addWidget(zoom_reset_btn)
-
-        zoom_group.addLayout(zoom_row)
-        controls.addLayout(zoom_group)
+        zoom_group.addWidget(zoom_out_btn)
+        row2.addLayout(zoom_group)
 
         # Rotation controls
-        rotate_group = QVBoxLayout()
+        rotate_group = QHBoxLayout()
+        rotate_group.setSpacing(2)
         rotate_label = QLabel("Rotate:")
-        rotate_label.setStyleSheet("font-weight: bold; font-size: 10pt;")
+        rotate_label.setToolTip("Rotate view (or drag mouse on canvas)")
         rotate_group.addWidget(rotate_label)
 
-        rotate_row = QHBoxLayout()
-        rotate_left_btn = QPushButton("\u2190")  # Left arrow
-        rotate_left_btn.setMaximumWidth(30)
-        rotate_left_btn.setToolTip("Rotate left (or drag mouse)")
+        rotate_left_btn = QPushButton("\u2190")
+        rotate_left_btn.setFixedWidth(28)
+        rotate_left_btn.setToolTip("Rotate left")
         rotate_left_btn.clicked.connect(self.canvas.rotate_left)
-        rotate_row.addWidget(rotate_left_btn)
+        rotate_group.addWidget(rotate_left_btn)
 
-        rotate_right_btn = QPushButton("\u2192")  # Right arrow
-        rotate_right_btn.setMaximumWidth(30)
-        rotate_right_btn.setToolTip("Rotate right (or drag mouse)")
+        rotate_right_btn = QPushButton("\u2192")
+        rotate_right_btn.setFixedWidth(28)
+        rotate_right_btn.setToolTip("Rotate right")
         rotate_right_btn.clicked.connect(self.canvas.rotate_right)
-        rotate_row.addWidget(rotate_right_btn)
+        rotate_group.addWidget(rotate_right_btn)
 
-        rotate_up_btn = QPushButton("\u2191")  # Up arrow
-        rotate_up_btn.setMaximumWidth(30)
+        rotate_up_btn = QPushButton("\u2191")
+        rotate_up_btn.setFixedWidth(28)
         rotate_up_btn.setToolTip("Rotate up")
         rotate_up_btn.clicked.connect(self.canvas.rotate_up)
-        rotate_row.addWidget(rotate_up_btn)
+        rotate_group.addWidget(rotate_up_btn)
 
-        rotate_down_btn = QPushButton("\u2193")  # Down arrow
-        rotate_down_btn.setMaximumWidth(30)
+        rotate_down_btn = QPushButton("\u2193")
+        rotate_down_btn.setFixedWidth(28)
         rotate_down_btn.setToolTip("Rotate down")
         rotate_down_btn.clicked.connect(self.canvas.rotate_down)
-        rotate_row.addWidget(rotate_down_btn)
+        rotate_group.addWidget(rotate_down_btn)
+        row2.addLayout(rotate_group)
 
-        rotate_group.addLayout(rotate_row)
-        controls.addLayout(rotate_group)
+        # Reset View button
+        reset_btn = QPushButton("Reset View")
+        reset_btn.setToolTip("Reset zoom and rotation to default")
+        reset_btn.clicked.connect(self.canvas.reset_view)
+        row2.addWidget(reset_btn)
 
-        layout.addLayout(controls)
+        layout.addLayout(row2)
 
     def set_density_cubes(self, promolecule: DensityCube | None = None,
                           deformation: DensityCube | None = None,
@@ -855,9 +900,9 @@ class SliceExplorer(QWidget):
         self.canvas.set_highlighted_slice(value)
         self._update_slice_label()
 
-    def _on_color_mode_changed(self, index: int):
-        """Handle color mode change."""
-        mode = "bw" if index == 0 else "color"
+    def _on_color_mode_changed(self, button_id: int):
+        """Handle color mode toggle button change."""
+        mode = "bw" if button_id == 0 else "color"
         self.canvas.set_color_mode(mode)
 
     def _on_contours_toggled(self, state: int):
@@ -883,10 +928,14 @@ class SliceExplorer(QWidget):
         self.canvas.set_show_only_highlighted(state == Qt.CheckState.Checked.value)
 
     def _update_slice_label(self):
-        """Update the slice number label."""
+        """Update the slice number label with Z-coordinate."""
         current = self.slice_slider.value() + 1
         total = self.slice_slider.maximum() + 1
-        self.slice_label.setText(f"{current}/{total}")
+        z_coord = self.canvas.get_slice_z_coord(self.slice_slider.value())
+        if z_coord is not None:
+            self.slice_label.setText(f"{current}/{total} (z={z_coord:.1f}Å)")
+        else:
+            self.slice_label.setText(f"{current}/{total}")
 
     def clear(self):
         """Clear the explorer."""
