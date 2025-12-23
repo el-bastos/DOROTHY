@@ -6,7 +6,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 
 ## Current Status
 
-**Version:** 0.3.6 (Development)
+**Version:** 0.3.7 (Development)
 
 ### What's Working
 
@@ -194,6 +194,10 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 ---
 
 ## Changelog
+
+### v0.3.7 (December 2024)
+- **Single Slice Toggle**: New checkbox in 3D view to show only the selected slice, hiding all other planes and contours
+- Easier to focus on one slice at a time without visual clutter
 
 ### v0.3.6 (December 2024)
 - **2D Molecule Rotation**: Drag mouse or use arrow buttons to rotate molecule in 2D view

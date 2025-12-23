@@ -56,6 +56,9 @@ class SliceExplorerCanvas(FigureCanvas):
         # Show bonds when deformation density is available
         self._show_bonds = True
 
+        # Show only highlighted slice (hide others)
+        self._show_only_highlighted = False
+
         # Density hover display
         self._show_density_on_hover = False
         self._density_text = None
@@ -229,6 +232,11 @@ class SliceExplorerCanvas(FigureCanvas):
 
         for i, (z_coord, slice_data) in enumerate(slices):
             is_highlighted = (i == self._highlighted_slice)
+
+            # Skip non-highlighted slices if "show only highlighted" is enabled
+            if self._show_only_highlighted and not is_highlighted:
+                continue
+
             alpha = 0.9 if is_highlighted else 0.15
             Z = np.full_like(X, z_coord)
 
@@ -615,6 +623,12 @@ class SliceExplorerCanvas(FigureCanvas):
         if self._density_cube:
             self._draw_slices()
 
+    def set_show_only_highlighted(self, show_only: bool):
+        """Toggle showing only the highlighted slice vs all slices."""
+        self._show_only_highlighted = show_only
+        if self._density_cube:
+            self._draw_slices()
+
 
 class SliceExplorer(QWidget):
     """Interactive 3D Slice Explorer widget."""
@@ -710,6 +724,12 @@ class SliceExplorer(QWidget):
         self.density_info_check.setToolTip("Show electron density statistics")
         self.density_info_check.stateChanged.connect(self._on_density_info_toggled)
         contour_group.addWidget(self.density_info_check)
+
+        self.single_slice_check = QCheckBox("Single Slice")
+        self.single_slice_check.setChecked(False)
+        self.single_slice_check.setToolTip("Show only the selected slice, hide all others")
+        self.single_slice_check.stateChanged.connect(self._on_single_slice_toggled)
+        contour_group.addWidget(self.single_slice_check)
         controls.addLayout(contour_group)
 
         # Contour scale slider
@@ -857,6 +877,10 @@ class SliceExplorer(QWidget):
     def _on_bonds_toggled(self, state: int):
         """Handle bonds checkbox toggle."""
         self.canvas.set_show_bonds(state == Qt.CheckState.Checked.value)
+
+    def _on_single_slice_toggled(self, state: int):
+        """Handle single slice checkbox toggle."""
+        self.canvas.set_show_only_highlighted(state == Qt.CheckState.Checked.value)
 
     def _update_slice_label(self):
         """Update the slice number label."""
