@@ -60,20 +60,36 @@ class DensityCube:
 
     def get_z_slices(self, n_slices: int) -> list[tuple[float, np.ndarray]]:
         """
-        Get evenly spaced slices along z-axis.
+        Get evenly spaced slices along z-axis, distributed over molecule extent.
 
         Returns:
             List of (z_coordinate, 2D_array) tuples
         """
+        bohr_to_ang = 0.529177
         nz = self.shape[2]
-        indices = np.linspace(0, nz - 1, n_slices, dtype=int)
+
+        # Determine Z range based on atom positions (molecule extent)
+        if self.atoms:
+            atom_z = np.array([a[3] for a in self.atoms]) * bohr_to_ang
+            z_min = atom_z.min() - 1.0  # Add 1 Angstrom padding
+            z_max = atom_z.max() + 1.0
+        else:
+            # Fallback to full cube extent
+            z_min = self.origin[2] * bohr_to_ang
+            z_max = (self.origin[2] + (nz - 1) * self.axes[2, 2]) * bohr_to_ang
+
+        # Generate Z coordinates for slices
+        z_coords_ang = np.linspace(z_min, z_max, n_slices)
 
         slices = []
-        for idx in indices:
-            z_coord = self.origin[2] + idx * self.axes[2, 2]
-            z_angstrom = z_coord * 0.529177  # Bohr to Angstrom
+        for z_ang in z_coords_ang:
+            # Convert to grid index
+            z_bohr = z_ang / bohr_to_ang
+            idx = int(round((z_bohr - self.origin[2]) / self.axes[2, 2]))
+            idx = max(0, min(idx, nz - 1))  # Clamp to valid range
+
             slice_data = self.data[:, :, idx]
-            slices.append((z_angstrom, slice_data))
+            slices.append((z_ang, slice_data))
 
         return slices
 
@@ -83,18 +99,12 @@ class DensityCube:
         plane_definition
     ) -> tuple[list[tuple[float, np.ndarray]], dict]:
         """
-        Get slices perpendicular to a custom plane.
+        Get slices sampled from a custom plane orientation.
 
-        This method samples the density cube along slices that are
-        perpendicular to the given plane normal, using the provided
-        u/v axes for orientation and center for positioning.
-
-        The coordinate system is:
-        - normal: direction of slice progression (perpendicular to slice planes)
-        - u: "right" direction in the slice plane (first axis of 2D grid)
-        - v: "up" direction in the slice plane (second axis of 2D grid)
-
-        These form a right-handed coordinate system: u × v = normal
+        Samples density along slices perpendicular to the given plane normal,
+        but returns data in a format compatible with Z-slice display (horizontal
+        planes). The slice data is sampled from tilted planes but displayed
+        as horizontal slices at evenly spaced Z coordinates.
 
         Args:
             n_slices: Number of slices to extract
@@ -103,15 +113,13 @@ class DensityCube:
 
         Returns:
             Tuple of:
-            - List of (offset, 2D_array) tuples where offset is the distance
-              along the normal from the plane center
-            - Dict with 'normal', 'u', 'v' basis vectors, 'center', 'half_extent', and 'n_points'
+            - List of (z_coordinate, 2D_array) tuples for horizontal display
+            - Dict with display grid info (origin, x_extent, y_extent, z_min, z_max)
         """
         from scipy.interpolate import RegularGridInterpolator
 
         # Handle both PlaneDefinition objects and raw normal vectors
         if hasattr(plane_definition, 'normal'):
-            # PlaneDefinition object - use provided basis vectors directly
             normal = np.asarray(plane_definition.normal, dtype=float)
             normal = normal / np.linalg.norm(normal)
             u = np.asarray(plane_definition.u_axis, dtype=float)
@@ -119,15 +127,19 @@ class DensityCube:
             v = np.asarray(plane_definition.v_axis, dtype=float)
             v = v / np.linalg.norm(v)
             user_center = np.asarray(plane_definition.center, dtype=float)
-            use_user_center = True
         else:
-            # Raw normal vector (backward compatibility)
             normal = np.asarray(plane_definition, dtype=float)
             normal = normal / np.linalg.norm(normal)
-            u = None
-            v = None
+            # Create orthonormal basis: u × v = normal
+            if abs(normal[2]) < 0.9:
+                ref = np.array([0.0, 0.0, 1.0])
+            else:
+                ref = np.array([1.0, 0.0, 0.0])
+            v = np.cross(normal, ref)
+            v = v / np.linalg.norm(v)
+            u = np.cross(v, normal)
+            u = u / np.linalg.norm(u)
             user_center = None
-            use_user_center = False
 
         # Convert grid parameters to Angstrom
         bohr_to_ang = 0.529177
@@ -141,7 +153,7 @@ class DensityCube:
         y_coords = origin_ang[1] + np.arange(ny) * axes_ang[1, 1]
         z_coords = origin_ang[2] + np.arange(nz) * axes_ang[2, 2]
 
-        # Create interpolator
+        # Create interpolator for sampling
         interpolator = RegularGridInterpolator(
             (x_coords, y_coords, z_coords),
             self.data,
@@ -150,11 +162,16 @@ class DensityCube:
             fill_value=0.0
         )
 
-        # Determine center point
-        if use_user_center:
-            center_3d = user_center.copy()
-        elif self.atoms:
+        # Get atom coordinates in Angstrom
+        if self.atoms:
             atom_coords = np.array([(a[1], a[2], a[3]) for a in self.atoms]) * bohr_to_ang
+        else:
+            atom_coords = None
+
+        # Determine sampling center
+        if user_center is not None:
+            center_3d = user_center.copy()
+        elif atom_coords is not None:
             center_3d = atom_coords.mean(axis=0)
         else:
             center_3d = np.array([
@@ -163,103 +180,101 @@ class DensityCube:
                 (z_coords[0] + z_coords[-1]) / 2,
             ])
 
-        # Calculate extent along normal for slice distribution
-        # Use atom positions to distribute slices across the molecule
-        if self.atoms:
-            atom_coords = np.array([(a[1], a[2], a[3]) for a in self.atoms]) * bohr_to_ang
+        # Calculate extent along normal for slice distribution (molecule extent)
+        if atom_coords is not None:
             projections = (atom_coords - center_3d) @ normal
-            min_proj = projections.min() - 1.0  # Add padding
+            min_proj = projections.min() - 1.0
             max_proj = projections.max() + 1.0
         else:
-            # Fallback to cube corners if no atoms
+            # Use cube diagonal projection
             corners = np.array([
                 [x_coords[0], y_coords[0], z_coords[0]],
-                [x_coords[-1], y_coords[0], z_coords[0]],
-                [x_coords[0], y_coords[-1], z_coords[0]],
-                [x_coords[0], y_coords[0], z_coords[-1]],
                 [x_coords[-1], y_coords[-1], z_coords[-1]],
             ])
             projections = (corners - center_3d) @ normal
             min_proj = projections.min()
             max_proj = projections.max()
 
-        # Create orthonormal basis for the slice plane if not provided
-        # Use consistent convention: u × v = normal (right-handed)
-        if u is None or v is None:
-            # Find a vector not parallel to normal
-            if abs(normal[2]) < 0.9:
-                ref = np.array([0.0, 0.0, 1.0])
-            else:
-                ref = np.array([1.0, 0.0, 0.0])
+        # Use the SAME XY grid as the density cube for display
+        # This ensures oriented slices display exactly like Z-slices
+        display_nx, display_ny = nx, ny
+        x_display = x_coords
+        y_display = y_coords
+        X_display, Y_display = np.meshgrid(x_display, y_display, indexing='ij')
 
-            # Create right-handed basis: u × v = normal
-            v = np.cross(normal, ref)
-            v = v / np.linalg.norm(v)
-            u = np.cross(v, normal)
-            u = u / np.linalg.norm(u)
-
-        # Determine slice sampling resolution
-        grid_spacing = min(
-            abs(axes_ang[0, 0]),
-            abs(axes_ang[1, 1]),
-            abs(axes_ang[2, 2])
-        )
-
-        # Calculate slice extent based on atom positions projected onto the slice plane
-        # This ensures slices are sized to fit the molecule, like Z-slices
-        if self.atoms:
-            atom_coords = np.array([(a[1], a[2], a[3]) for a in self.atoms]) * bohr_to_ang
-            # Project atoms onto u and v axes relative to center
-            u_projections = (atom_coords - center_3d) @ u
-            v_projections = (atom_coords - center_3d) @ v
-            # Extent is max spread in either direction plus padding
-            u_extent = max(abs(u_projections.min()), abs(u_projections.max())) + 2.0
-            v_extent = max(abs(v_projections.min()), abs(v_projections.max())) + 2.0
-            half_extent = max(u_extent, v_extent)
+        # Determine Z range for display (molecule extent along Z)
+        if atom_coords is not None:
+            z_min = atom_coords[:, 2].min() - 1.0
+            z_max = atom_coords[:, 2].max() + 1.0
         else:
-            # Fallback to cube dimensions
-            extent = max(
-                x_coords[-1] - x_coords[0],
-                y_coords[-1] - y_coords[0],
-                z_coords[-1] - z_coords[0]
-            )
-            half_extent = extent / 2
+            z_min = z_coords[0]
+            z_max = z_coords[-1]
 
-        n_points = int(2 * half_extent / grid_spacing) + 1
-        n_points = min(n_points, 200)  # Cap for performance
+        # Generate display Z coordinates
+        z_display_coords = np.linspace(z_min, z_max, n_slices)
 
-        # Generate slice offsets (relative to center)
+        # Generate sampling offsets along the normal
         offsets = np.linspace(min_proj, max_proj, n_slices)
 
         slices = []
-        for offset in offsets:
-            # Create sampling grid for this slice
-            u_range = np.linspace(-half_extent, half_extent, n_points)
-            v_range = np.linspace(-half_extent, half_extent, n_points)
-            U, V = np.meshgrid(u_range, v_range, indexing='ij')
+        for i, (offset, z_display) in enumerate(zip(offsets, z_display_coords)):
+            # Sample points: for each (x, y) in the display grid,
+            # find the corresponding point on the tilted sampling plane
+            # that projects to this (x, y) position
 
-            # Calculate 3D coordinates for each sample point
-            # Point at grid[i,j] = center + offset*normal + u_range[i]*u + v_range[j]*v
+            # The sampling plane is: center + offset*normal + s*u + t*v
+            # We want to sample at points that, when viewed from above,
+            # appear at the XY grid positions
+
+            # For a point (x, y) in the display, find (s, t) such that:
+            # center_x + offset*normal_x + s*u_x + t*v_x = x
+            # center_y + offset*normal_y + s*u_y + t*v_y = y
+            # Then Z_sample = center_z + offset*normal_z + s*u_z + t*v_z
+
             slice_center = center_3d + normal * offset
-            X = slice_center[0] + U * u[0] + V * v[0]
-            Y = slice_center[1] + U * u[1] + V * v[1]
-            Z = slice_center[2] + U * u[2] + V * v[2]
 
-            # Sample the density
-            points = np.stack([X, Y, Z], axis=-1)
-            slice_data = interpolator(points)
+            # Solve for s, t at each display point
+            # [u_x  v_x] [s]   [x - slice_center_x]
+            # [u_y  v_y] [t] = [y - slice_center_y]
 
-            slices.append((offset, slice_data))
+            A = np.array([[u[0], v[0]], [u[1], v[1]]])
+            det = A[0, 0] * A[1, 1] - A[0, 1] * A[1, 0]
 
-        # Return basis info for positioning slices in 3D
-        # Include n_points to ensure slice_explorer uses the same grid
+            if abs(det) < 1e-10:
+                # Degenerate case - plane is nearly vertical
+                # Fall back to direct Z-slice
+                z_bohr = z_display / bohr_to_ang
+                idx = int(round((z_bohr - self.origin[2]) / self.axes[2, 2]))
+                idx = max(0, min(idx, nz - 1))
+                slice_data = self.data[:, :, idx]
+            else:
+                # Solve the linear system for each point
+                dx = X_display - slice_center[0]
+                dy = Y_display - slice_center[1]
+
+                # Inverse of A
+                A_inv = np.array([[A[1, 1], -A[0, 1]], [-A[1, 0], A[0, 0]]]) / det
+
+                s = A_inv[0, 0] * dx + A_inv[0, 1] * dy
+                t = A_inv[1, 0] * dx + A_inv[1, 1] * dy
+
+                # Calculate Z coordinates on the sampling plane
+                Z_sample = slice_center[2] + s * u[2] + t * v[2]
+
+                # Sample the density at these 3D points
+                points = np.stack([X_display, Y_display, Z_sample], axis=-1)
+                slice_data = interpolator(points)
+
+            slices.append((z_display, slice_data))
+
+        # Return info for display (same format as Z-slices would use)
         basis_info = {
-            'normal': normal,
-            'u': u,
-            'v': v,
-            'center': center_3d,
-            'half_extent': half_extent,
-            'n_points': n_points,
+            'origin': origin_ang,
+            'x_extent': x_coords[-1] - x_coords[0],
+            'y_extent': y_coords[-1] - y_coords[0],
+            'z_min': z_min,
+            'z_max': z_max,
+            'is_oriented': True,  # Flag to indicate this used custom orientation
         }
 
         return slices, basis_info

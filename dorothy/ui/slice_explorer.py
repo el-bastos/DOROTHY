@@ -196,25 +196,24 @@ class SliceExplorerCanvas(FigureCanvas):
         # Debug: print levels
         # print(f"Density type: {self._density_type}, max: {all_data.max():.4f}, levels_pos: {levels_pos[:3] if levels_pos else 'none'}")
 
-        # Draw each slice
+        # Draw each slice - both modes now use the same horizontal display format
         if use_custom_plane and basis_info:
-            self._draw_oriented_slices(slices, basis_info, levels_pos, levels_neg)
-            # Calculate limits for oriented slices
-            center = basis_info['center']
-            half = basis_info['half_extent'] + 1.0
-            xlim = (center[0] - half, center[0] + half)
-            ylim = (center[1] - half, center[1] + half)
-            zlim = (center[2] - half, center[2] + half)
+            # Use basis_info for extents if available
+            bi_origin = basis_info.get('origin', origin)
+            bi_x_extent = basis_info.get('x_extent', x_extent)
+            bi_y_extent = basis_info.get('y_extent', y_extent)
+            self._draw_z_slices(slices, bi_origin, bi_x_extent, bi_y_extent, levels_pos, levels_neg)
         else:
             self._draw_z_slices(slices, origin, x_extent, y_extent, levels_pos, levels_neg)
-            # Calculate limits for Z-axis slices
-            x = np.linspace(origin[0], origin[0] + x_extent, slices[0][1].shape[0])
-            y = np.linspace(origin[1], origin[1] + y_extent, slices[0][1].shape[1])
-            z_coords = [z for z, _ in slices]
-            padding = 0.5
-            xlim = (x.min() - padding, x.max() + padding)
-            ylim = (y.min() - padding, y.max() + padding)
-            zlim = (min(z_coords) - padding, max(z_coords) + padding)
+
+        # Calculate display limits from the actual slice data
+        x = np.linspace(origin[0], origin[0] + x_extent, slices[0][1].shape[0])
+        y = np.linspace(origin[1], origin[1] + y_extent, slices[0][1].shape[1])
+        z_coords = [z for z, _ in slices]
+        padding = 0.5
+        xlim = (x.min() - padding, x.max() + padding)
+        ylim = (y.min() - padding, y.max() + padding)
+        zlim = (min(z_coords) - padding, max(z_coords) + padding)
 
         # Draw bonds and atoms
         self._draw_bonds()

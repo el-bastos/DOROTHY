@@ -194,11 +194,10 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 ## Changelog
 
 ### v0.3.3 (December 2024)
-- Fixed coordinate system alignment for custom plane selection
-- Contours now properly align with 3D display when using 4-atom plane definition
-- Unified right-handed coordinate convention (u × v = normal) across all modules
-- Improved basis vector handling in density sampling and visualization
-- Fixed slice extent to fit molecule bounds instead of full cube dimensions
+- Major fix: Custom plane slices now display as horizontal planes (like auto mode)
+- Slices distributed over molecule extent, not full density cube
+- Both auto and plane-selection modes now show consistent horizontal slices
+- Oriented slices sample from tilted planes but display horizontally for comparison
 
 ### v0.3.2 (December 2024)
 - Fixed contour rendering for custom plane selection (matplotlib 3.8+ compatibility)
