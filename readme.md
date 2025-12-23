@@ -6,15 +6,17 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 
 ## Current Status
 
-**Version:** 0.2.0 (Development)
+**Version:** 0.3.0 (Development)
 
 ### What's Working
 
 - **PyQt6 Desktop Application** - Native UI with 5 screens
 - **Molecule Search** - Local CIF files + COD online (with fallback)
 - **CIF Parser** - Extracts atomic coordinates, cell parameters, space groups
-- **2D Molecule Viewer** - Bond detection, CPK coloring
-- **3D Slice Explorer** - Interactive 3D preview of density slices before printing
+- **2D Molecule Viewer** - Bond detection, CPK coloring, interactive atom selection
+- **3D Slice Explorer** - Interactive 3D preview with zoom, bonds, and custom orientation
+- **Interactive Plane Selection** - Click 3 atoms to define custom slicing plane
+- **Auto xTB on 3D View** - Automatically calculates deformation density when switching to 3D
 - **Generation Pipeline** - Promolecule density calculation, contour slicing, PDF export
 - **Principal Axes Alignment** - Molecules auto-rotated for optimal slicing orientation
 - **xTB Integration** - Deformation density via xTB (Homebrew/conda), with install dialog
@@ -190,6 +192,15 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 ---
 
 ## Changelog
+
+### v0.3.0 (December 2024)
+- Interactive plane selection: click 3 atoms in 2D or 3D view to define custom slicing orientation
+- Auto-run xTB when switching to 3D view (with progress indicator)
+- Zoom controls for 3D cube view (+/- buttons, scroll wheel, reset)
+- Rotation controls for 3D view (arrow buttons + drag-to-rotate)
+- Bond visualization in 3D view (toggle on/off)
+- Selection synchronization between 2D and 3D views
+- Custom plane slicing via `get_oriented_slices()` with scipy interpolation
 
 ### v0.2.1 (December 2024)
 - Added 3D Interactive Slice Explorer with contour visualization

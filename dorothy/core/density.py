@@ -77,6 +77,139 @@ class DensityCube:
 
         return slices
 
+    def get_oriented_slices(
+        self,
+        n_slices: int,
+        plane_normal: np.ndarray
+    ) -> tuple[list[tuple[float, np.ndarray]], dict]:
+        """
+        Get slices perpendicular to a custom plane normal.
+
+        This method samples the density cube along slices that are
+        perpendicular to the given normal vector, allowing visualization
+        from any orientation (not just along the Z-axis).
+
+        Args:
+            n_slices: Number of slices to extract
+            plane_normal: Unit vector defining slice orientation (in Angstrom space)
+
+        Returns:
+            Tuple of:
+            - List of (offset, 2D_array) tuples where offset is the distance
+              along the normal from the molecule center
+            - Dict with 'normal', 'u', 'v' basis vectors and 'extent' for positioning
+        """
+        from scipy.interpolate import RegularGridInterpolator
+
+        # Normalize the plane normal
+        normal = plane_normal / np.linalg.norm(plane_normal)
+
+        # Convert grid parameters to Angstrom
+        bohr_to_ang = 0.529177
+        origin_ang = self.origin * bohr_to_ang
+        axes_ang = self.axes * bohr_to_ang
+
+        nx, ny, nz = self.shape
+
+        # Create coordinate arrays for the grid
+        x_coords = origin_ang[0] + np.arange(nx) * axes_ang[0, 0]
+        y_coords = origin_ang[1] + np.arange(ny) * axes_ang[1, 1]
+        z_coords = origin_ang[2] + np.arange(nz) * axes_ang[2, 2]
+
+        # Create interpolator
+        interpolator = RegularGridInterpolator(
+            (x_coords, y_coords, z_coords),
+            self.data,
+            method='linear',
+            bounds_error=False,
+            fill_value=0.0
+        )
+
+        # Calculate molecule center and extent along normal
+        if self.atoms:
+            atom_coords = np.array([(a[1], a[2], a[3]) for a in self.atoms]) * bohr_to_ang
+            center_3d = atom_coords.mean(axis=0)
+            projections = (atom_coords - center_3d) @ normal
+            min_proj = projections.min() - 1.0  # Add padding
+            max_proj = projections.max() + 1.0
+        else:
+            center_3d = np.array([
+                (x_coords[0] + x_coords[-1]) / 2,
+                (y_coords[0] + y_coords[-1]) / 2,
+                (z_coords[0] + z_coords[-1]) / 2,
+            ])
+            corners = np.array([
+                [x_coords[0], y_coords[0], z_coords[0]],
+                [x_coords[-1], y_coords[0], z_coords[0]],
+                [x_coords[0], y_coords[-1], z_coords[0]],
+                [x_coords[0], y_coords[0], z_coords[-1]],
+                [x_coords[-1], y_coords[-1], z_coords[-1]],
+            ])
+            projections = (corners - center_3d) @ normal
+            min_proj = projections.min()
+            max_proj = projections.max()
+
+        # Create orthonormal basis for the slice plane
+        # Find a vector not parallel to normal
+        if abs(normal[2]) < 0.9:
+            ref = np.array([0.0, 0.0, 1.0])
+        else:
+            ref = np.array([1.0, 0.0, 0.0])
+
+        u = np.cross(normal, ref)
+        u = u / np.linalg.norm(u)
+        v = np.cross(normal, u)
+
+        # Determine slice sampling resolution
+        grid_spacing = min(
+            abs(axes_ang[0, 0]),
+            abs(axes_ang[1, 1]),
+            abs(axes_ang[2, 2])
+        )
+        extent = max(
+            x_coords[-1] - x_coords[0],
+            y_coords[-1] - y_coords[0],
+            z_coords[-1] - z_coords[0]
+        )
+        n_points = int(extent / grid_spacing) + 1
+        n_points = min(n_points, 200)  # Cap for performance
+
+        # Generate slice offsets (relative to molecule center)
+        offsets = np.linspace(min_proj, max_proj, n_slices)
+
+        slices = []
+        for offset in offsets:
+            # Create sampling points for this slice
+            half_extent = extent / 2
+            u_range = np.linspace(-half_extent, half_extent, n_points)
+            v_range = np.linspace(-half_extent, half_extent, n_points)
+            U, V = np.meshgrid(u_range, v_range, indexing='ij')
+
+            # Calculate 3D coordinates for each sample point
+            # Center point is at center_3d + offset along normal
+            slice_center = center_3d + normal * offset
+            X = slice_center[0] + U * u[0] + V * v[0]
+            Y = slice_center[1] + U * u[1] + V * v[1]
+            Z = slice_center[2] + U * u[2] + V * v[2]
+
+            # Sample the density
+            points = np.stack([X, Y, Z], axis=-1)
+            slice_data = interpolator(points)
+
+            slices.append((offset, slice_data))
+
+        # Return basis info for positioning slices in 3D
+        basis_info = {
+            'normal': normal,
+            'u': u,
+            'v': v,
+            'center': center_3d,
+            'extent': extent,
+            'half_extent': extent / 2,
+        }
+
+        return slices, basis_info
+
 
 def parse_cube_file(filepath: Path) -> Optional[DensityCube]:
     """

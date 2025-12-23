@@ -1,8 +1,11 @@
 """
 2D Molecule viewer widget using matplotlib.
+
+Supports interactive atom picking for plane definition.
 """
 
 import numpy as np
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSizePolicy
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -40,7 +43,10 @@ COVALENT_RADII = {
 
 
 class MoleculeCanvas(FigureCanvas):
-    """Canvas for displaying 2D molecule structure."""
+    """Canvas for displaying 2D molecule structure with atom picking."""
+
+    # Signal emitted when an atom is clicked (passes atom index)
+    atom_picked = pyqtSignal(int)
 
     def __init__(self, parent=None):
         self.fig = Figure(figsize=(5, 5), dpi=100)
@@ -51,6 +57,13 @@ class MoleculeCanvas(FigureCanvas):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         self._structure = None
+        self._selected_indices: list[int] = []
+        self._pick_enabled = False
+        self._atom_positions: list[tuple[float, float]] = []  # Store for hit testing
+
+        # Connect pick event
+        self.mpl_connect('button_press_event', self._on_click)
+
         self._clear_plot()
 
     def _clear_plot(self):
@@ -100,15 +113,26 @@ class MoleculeCanvas(FigureCanvas):
             self.ax.plot([x[i], x[j]], [y[i], y[j]],
                         color='#404040', linewidth=2, zorder=1)
 
+        # Store atom positions for hit testing
+        self._atom_positions = list(zip(x, y))
+
         # Draw atoms
         for idx, (xi, yi, sym) in enumerate(zip(x, y, symbols)):
             color = ELEMENT_COLORS.get(sym, '#808080')
             # Size based on element (H smaller)
             size = 150 if sym == 'H' else 300
 
+            # Highlight selected atoms
+            if idx in self._selected_indices:
+                edgecolor = '#FF0000'
+                linewidth = 3
+            else:
+                edgecolor = '#404040'
+                linewidth = 1
+
             # Draw atom circle
-            self.ax.scatter(xi, yi, s=size, c=color, edgecolors='#404040',
-                           linewidths=1, zorder=2)
+            self.ax.scatter(xi, yi, s=size, c=color, edgecolors=edgecolor,
+                           linewidths=linewidth, zorder=2)
 
             # Label (skip H for cleaner view)
             if sym != 'H':
@@ -143,6 +167,54 @@ class MoleculeCanvas(FigureCanvas):
                     bonds.append((i, j))
 
         return bonds
+
+    def _on_click(self, event):
+        """Handle mouse click for atom picking."""
+        if not self._pick_enabled or event.inaxes != self.ax:
+            return
+
+        if not self._atom_positions:
+            return
+
+        # Only process left button clicks
+        if event.button != 1:
+            return
+
+        # Find closest atom to click position using display coordinates
+        click_x, click_y = event.x, event.y
+        min_dist = float('inf')
+        closest_idx = -1
+
+        for idx, (ax, ay) in enumerate(self._atom_positions):
+            # Transform data coords to display coords
+            x_disp, y_disp = self.ax.transData.transform((ax, ay))
+            dist = np.sqrt((x_disp - click_x) ** 2 + (y_disp - click_y) ** 2)
+            if dist < min_dist:
+                min_dist = dist
+                closest_idx = idx
+
+        # Check if click is close enough to an atom (threshold in pixels)
+        if closest_idx >= 0 and min_dist < 25:  # 25 pixels threshold
+            self.atom_picked.emit(closest_idx)
+
+    def set_selection(self, indices: list[int]):
+        """
+        Update visual selection.
+
+        Args:
+            indices: List of atom indices to highlight
+        """
+        self._selected_indices = indices.copy()
+        if self._structure:
+            self._draw_molecule()
+
+    def set_pick_enabled(self, enabled: bool):
+        """Enable or disable atom picking."""
+        self._pick_enabled = enabled
+
+    def get_selection(self) -> list[int]:
+        """Get current selection."""
+        return self._selected_indices.copy()
 
 
 class MoleculeViewer(QWidget):

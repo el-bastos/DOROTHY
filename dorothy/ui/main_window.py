@@ -84,6 +84,63 @@ class XtbDownloadWorker(QThread):
         self.finished.emit(success)
 
 
+class XtbDensityWorker(QThread):
+    """Background thread for xTB density calculation."""
+    progress = pyqtSignal(str)  # status message
+    finished = pyqtSignal(object, object)  # promolecule_cube, deformation_cube
+
+    def __init__(self, structure: MoleculeStructure):
+        super().__init__()
+        self.structure = structure
+
+    def run(self):
+        from dorothy.core.xtb_manager import is_xtb_installed, run_xtb_density
+        from dorothy.core.density import (
+            parse_cube_file,
+            calculate_deformation_density,
+            create_density_cube_from_structure
+        )
+        import tempfile
+
+        promolecule = None
+        deformation = None
+
+        try:
+            # Always create promolecule (fast)
+            self.progress.emit("Generating promolecule density...")
+            promolecule = create_density_cube_from_structure(
+                self.structure,
+                resolution="coarse",
+                align_to_principal_axes=True
+            )
+
+            # Try xTB if available
+            if is_xtb_installed():
+                self.progress.emit("Running xTB calculation...")
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    cube_path = run_xtb_density(
+                        self.structure,
+                        Path(tmp_dir),
+                        lambda msg: self.progress.emit(msg)
+                    )
+
+                    if cube_path:
+                        self.progress.emit("Processing density data...")
+                        molecular = parse_cube_file(cube_path)
+                        if molecular:
+                            deformation = calculate_deformation_density(
+                                molecular,
+                                self.structure
+                            )
+
+            self.progress.emit("Ready")
+
+        except Exception as e:
+            self.progress.emit(f"Error: {e}")
+
+        self.finished.emit(promolecule, deformation)
+
+
 class XtbDownloadDialog(QDialog):
     """Dialog for downloading/installing xTB."""
 
@@ -241,10 +298,14 @@ class MainWindow(QMainWindow):
         self.searcher = CODSearch()  # Single instance to cache local molecules
         self.search_worker = None
         self.generation_worker = None
+        self.xtb_density_worker = None
         self.current_results = []
         self.selected_molecule: MoleculeResult | None = None
         self.selected_structure: MoleculeStructure | None = None
         self.last_result: GenerationResult | None = None
+
+        # Selection manager for plane definition
+        self.selection_manager = None
 
         # Create central widget and main layout
         central_widget = QWidget()
@@ -467,6 +528,21 @@ class MainWindow(QMainWindow):
             }
         """)
         view_toggle.addWidget(self.view_3d_btn)
+
+        # Selection controls for plane definition
+        view_toggle.addSpacing(20)
+        self.clear_selection_btn = QPushButton(self.tr("Clear Selection"))
+        self.clear_selection_btn.setMaximumWidth(120)
+        self.clear_selection_btn.clicked.connect(self._clear_atom_selection)
+        self.clear_selection_btn.setToolTip("Clear atom selection for plane definition")
+        view_toggle.addWidget(self.clear_selection_btn)
+
+        self.reset_plane_btn = QPushButton(self.tr("Reset Plane"))
+        self.reset_plane_btn.setMaximumWidth(100)
+        self.reset_plane_btn.clicked.connect(self._reset_slice_plane)
+        self.reset_plane_btn.setToolTip("Reset to default slicing orientation")
+        view_toggle.addWidget(self.reset_plane_btn)
+
         view_toggle.addStretch()
         viewer_container.addLayout(view_toggle)
 
@@ -795,6 +871,9 @@ class MainWindow(QMainWindow):
         # Show structure in viewer
         if self.selected_structure:
             self.molecule_viewer.set_structure(self.selected_structure)
+
+            # Set up selection manager for plane definition
+            self._setup_selection_manager()
         else:
             self.molecule_viewer.clear()
 
@@ -806,6 +885,72 @@ class MainWindow(QMainWindow):
 
         # Show preview screen
         self.stacked_widget.setCurrentWidget(self.preview_screen)
+
+    def _setup_selection_manager(self):
+        """Set up selection manager for the current structure."""
+        if not self.selected_structure:
+            return
+
+        from dorothy.core.selection import SelectionManager
+        import numpy as np
+
+        # Get aligned coordinates for plane calculation
+        coords = self.selected_structure.get_cartesian_coords(
+            align_to_principal_axes=True
+        )
+
+        # Create selection manager
+        self.selection_manager = SelectionManager(self)
+        self.selection_manager.set_coordinates(coords)
+
+        # Connect selection signals
+        self.selection_manager.selection_changed.connect(self._on_selection_changed)
+        self.selection_manager.plane_defined.connect(self._on_plane_defined)
+
+        # Connect picker signals from both views
+        self.molecule_viewer.canvas.atom_picked.connect(
+            self.selection_manager.toggle_atom
+        )
+        self.slice_explorer.canvas.atom_picked.connect(
+            self.selection_manager.toggle_atom
+        )
+
+        # Enable picking by default (can be toggled)
+        self.molecule_viewer.canvas.set_pick_enabled(True)
+        self.slice_explorer.canvas.set_pick_enabled(True)
+
+    def _on_selection_changed(self, indices: list):
+        """Synchronize selection across views."""
+        self.molecule_viewer.canvas.set_selection(indices)
+        self.slice_explorer.canvas.set_selection(indices)
+
+        # Update status
+        if len(indices) == 0:
+            hint = "Click atoms to define slice plane (3 needed)"
+        elif len(indices) < 3:
+            hint = f"Selected {len(indices)}/3 atoms for plane definition"
+        else:
+            hint = "Plane defined! Slices reoriented."
+
+        # Show hint in info label temporarily
+        if self.selected_molecule:
+            self.mol_info_label.setText(
+                f"{self.selected_molecule.formula} - {hint}"
+            )
+
+    def _on_plane_defined(self, normal):
+        """Handle plane definition from 3 selected atoms."""
+        self.slice_explorer.canvas.set_custom_plane(normal)
+
+    def _clear_atom_selection(self):
+        """Clear current atom selection."""
+        if self.selection_manager:
+            self.selection_manager.clear()
+
+    def _reset_slice_plane(self):
+        """Reset to default Z-axis slicing."""
+        self._clear_atom_selection()
+        self.slice_explorer.canvas.set_custom_plane(None)
 
     def _on_generate(self):
         """Handle generate PDFs button click."""
@@ -926,12 +1071,52 @@ class MainWindow(QMainWindow):
             self.view_3d_btn.setChecked(True)
             self.viewer_stack.setCurrentWidget(self.slice_explorer)
 
-            # Generate density cube for 3D preview if not already done
+            # Auto-run xTB calculation for 3D preview if not already done
             if self.selected_structure and self.slice_explorer._promolecule_cube is None:
-                self._update_3d_preview()
+                self._start_3d_density_calculation()
+
+    def _start_3d_density_calculation(self):
+        """Start background xTB calculation for 3D preview."""
+        if not self.selected_structure:
+            return
+
+        # Show progress indicator
+        self.mol_info_label.setText("Calculating density...")
+
+        # Start background calculation
+        self.xtb_density_worker = XtbDensityWorker(self.selected_structure)
+        self.xtb_density_worker.progress.connect(self._on_xtb_density_progress)
+        self.xtb_density_worker.finished.connect(self._on_xtb_density_complete)
+        self.xtb_density_worker.start()
+
+    def _on_xtb_density_progress(self, message: str):
+        """Handle xTB density progress updates."""
+        self.mol_info_label.setText(message)
+
+    def _on_xtb_density_complete(self, promolecule, deformation):
+        """Handle xTB density calculation completion."""
+        if promolecule:
+            n_slices = self.slice_spinbox.value()
+            self.slice_explorer.set_density_cubes(
+                promolecule=promolecule,
+                deformation=deformation,
+                n_slices=n_slices
+            )
+
+            # Update info label
+            if deformation:
+                self.mol_info_label.setText(
+                    f"{self.selected_molecule.formula} - "
+                    "Deformation density available (showing bonds)"
+                )
+            else:
+                self.mol_info_label.setText(
+                    f"{self.selected_molecule.formula} - "
+                    "Promolecule only (install xTB for deformation)"
+                )
 
     def _update_3d_preview(self):
-        """Generate density cube for 3D preview."""
+        """Generate density cube for 3D preview (legacy sync method)."""
         if not self.selected_structure:
             return
 
@@ -945,7 +1130,7 @@ class MainWindow(QMainWindow):
         n_slices = self.slice_spinbox.value()
         self.slice_explorer.set_density_cubes(
             promolecule=cube,
-            deformation=None,  # Deformation requires xTB, not available in preview
+            deformation=None,
             n_slices=n_slices
         )
 
