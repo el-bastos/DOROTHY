@@ -34,6 +34,11 @@ class CODSearch:
 
     BASE_URL = "https://www.crystallography.net/cod"
     TIMEOUT = 10  # seconds
+    # COD server filters by User-Agent, so we need to use a browser-like one
+    HEADERS = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Dorothy/0.3',
+        'Accept': '*/*',
+    }
 
     def __init__(self, examples_dir: Optional[str | Path] = None):
         self._online = None
@@ -76,6 +81,7 @@ class CODSearch:
         try:
             response = requests.head(
                 f"{self.BASE_URL}/search.html",
+                headers=self.HEADERS,
                 timeout=5,
                 verify=False,  # COD has SSL certificate mismatch
             )
@@ -149,6 +155,7 @@ class CODSearch:
         response = requests.post(
             f"{self.BASE_URL}/result.php",
             data=data,
+            headers=self.HEADERS,
             timeout=self.TIMEOUT,
             verify=False,  # COD has SSL certificate mismatch
         )
@@ -217,6 +224,7 @@ class CODSearch:
             url = self.get_cif_url(cod_id)
             response = requests.get(
                 url,
+                headers=self.HEADERS,
                 timeout=self.TIMEOUT,
                 verify=False,  # COD has SSL certificate mismatch
             )
