@@ -9,14 +9,17 @@ import numpy as np
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSlider, QLabel,
     QPushButton, QComboBox, QCheckBox, QSizePolicy, QButtonGroup,
-    QFrame
+    QFrame, QDialog, QDialogButtonBox
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from dorothy.core.density import DensityCube
+
+# Element symbols for display
+Z_TO_SYMBOL = {1: 'H', 6: 'C', 7: 'N', 8: 'O', 9: 'F', 15: 'P', 16: 'S', 17: 'Cl', 35: 'Br', 53: 'I'}
 
 # Covalent radii (Å) for bond detection
 COVALENT_RADII = {
@@ -24,12 +27,140 @@ COVALENT_RADII = {
     15: 1.07, 16: 1.05, 17: 1.02, 35: 1.20, 53: 1.39,
 }
 
+# Element colors (CPK)
+ELEMENT_COLORS = {
+    1: '#FFFFFF', 6: '#909090', 7: '#3050F8', 8: '#FF0D0D', 9: '#90E050',
+    15: '#FF8000', 16: '#FFFF30', 17: '#1FF01F', 35: '#A62929', 53: '#940094',
+}
+
+
+class Slice2DPreviewDialog(QDialog):
+    """Dialog showing a 2D contour plot of the current slice."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("2D Slice Preview")
+        self.setMinimumSize(500, 500)
+
+        layout = QVBoxLayout(self)
+
+        # Matplotlib figure
+        self.fig = Figure(figsize=(6, 6), dpi=100)
+        self.fig.patch.set_facecolor('white')
+        self.canvas = FigureCanvas(self.fig)
+        layout.addWidget(self.canvas)
+
+        # Info label
+        self.info_label = QLabel()
+        self.info_label.setStyleSheet("font-size: 10pt; color: #666;")
+        layout.addWidget(self.info_label)
+
+        # Close button
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.close)
+        layout.addWidget(buttons)
+
+    def show_slice(self, slice_data: np.ndarray, z_coord: float, density_type: str,
+                   color_mode: str, atoms: list = None, contour_scale: float = 1.0,
+                   origin: np.ndarray = None, axes: np.ndarray = None):
+        """Display a 2D contour plot of the slice.
+
+        Args:
+            slice_data: 2D array of density values
+            z_coord: Z-coordinate of the slice in Angstrom
+            density_type: "promolecule" or "deformation"
+            color_mode: "bw" or "color"
+            atoms: List of (Z, x, y, z) in Bohr - atoms near this slice will be shown
+            contour_scale: Contour level scale factor
+            origin: Grid origin in Bohr
+            axes: Grid axes in Bohr
+        """
+        self.fig.clear()
+        ax = self.fig.add_subplot(111)
+
+        bohr_to_ang = 0.529177
+
+        # Create coordinate arrays if origin/axes provided
+        if origin is not None and axes is not None:
+            nx, ny = slice_data.shape
+            x = np.linspace(origin[0], origin[0] + nx * axes[0, 0], nx) * bohr_to_ang
+            y = np.linspace(origin[1], origin[1] + ny * axes[1, 1], ny) * bohr_to_ang
+            X, Y = np.meshgrid(x, y, indexing='ij')
+        else:
+            X, Y = np.meshgrid(np.arange(slice_data.shape[0]),
+                               np.arange(slice_data.shape[1]), indexing='ij')
+
+        # Determine contour levels
+        scale = contour_scale
+        if density_type == "deformation":
+            base_levels = np.array([0.005, 0.01, 0.02, 0.04, 0.08])
+            levels_pos = list(base_levels * scale)
+            levels_neg = list(-base_levels[::-1] * scale)
+
+            # Draw positive contours
+            valid_pos = [l for l in levels_pos if l < slice_data.max()]
+            if valid_pos:
+                color = 'black' if color_mode == 'bw' else '#2563eb'
+                ax.contour(X, Y, slice_data, levels=valid_pos, colors=color, linewidths=1.0)
+
+            # Draw negative contours
+            valid_neg = [l for l in levels_neg if l > slice_data.min()]
+            if valid_neg:
+                color = '#666666' if color_mode == 'bw' else '#dc2626'
+                ax.contour(X, Y, slice_data, levels=valid_neg, colors=color,
+                          linewidths=1.0, linestyles='dashed')
+
+            self.info_label.setText(
+                f"Deformation density at z = {z_coord:.2f} Å\n"
+                "Solid = electron accumulation (bonds) | Dashed = depletion"
+            )
+        else:
+            # Promolecule
+            max_val = slice_data.max()
+            if max_val > 0.001:
+                n_contours = max(3, int(7 / scale))
+                start = max_val * 0.02 * scale
+                end = max_val * 0.8
+                if start < end:
+                    levels = list(np.linspace(start, end, n_contours))
+                    color = 'black' if color_mode == 'bw' else '#2563eb'
+                    ax.contour(X, Y, slice_data, levels=levels, colors=color, linewidths=1.0)
+
+            self.info_label.setText(f"Promolecule density at z = {z_coord:.2f} Å")
+
+        # Draw atoms near this slice
+        if atoms and origin is not None:
+            slice_thickness = 0.5  # Show atoms within 0.5 Å of slice
+            for atom in atoms:
+                z_num, ax_b, ay_b, az_b = atom
+                az = az_b * bohr_to_ang
+                if abs(az - z_coord) < slice_thickness:
+                    ax_a = ax_b * bohr_to_ang
+                    ay_a = ay_b * bohr_to_ang
+                    color = ELEMENT_COLORS.get(z_num, '#808080')
+                    size = 100 if z_num == 1 else 200
+                    ax.scatter([ax_a], [ay_a], c=color, s=size, edgecolors='black',
+                              linewidths=1, alpha=0.8, zorder=10)
+                    # Label
+                    symbol = Z_TO_SYMBOL.get(z_num, '?')
+                    ax.annotate(symbol, (ax_a, ay_a), fontsize=8, ha='center', va='center')
+
+        ax.set_aspect('equal')
+        ax.set_xlabel('X (Å)')
+        ax.set_ylabel('Y (Å)')
+        ax.set_title(f'Slice at z = {z_coord:.2f} Å')
+
+        self.fig.tight_layout()
+        self.canvas.draw()
+
 
 class SliceExplorerCanvas(FigureCanvas):
     """3D Canvas for displaying stacked density slices with atom picking."""
 
     # Signal emitted when an atom is clicked (passes atom index)
     atom_picked = pyqtSignal(int)
+    # Signal emitted when a bond is clicked (passes tuple of atom indices and bond info)
+    bond_clicked = pyqtSignal(int, int, float)  # atom1_idx, atom2_idx, bond_length
 
     def __init__(self, parent=None):
         self.fig = Figure(figsize=(6, 6), dpi=100)
@@ -66,6 +197,14 @@ class SliceExplorerCanvas(FigureCanvas):
 
         # Contour level scale (1.0 = default, <1 = tighter/more, >1 = looser/fewer)
         self._contour_scale = 1.0
+
+        # Bond information storage for click detection
+        self._bonds: list[tuple[int, int, float]] = []  # (atom1_idx, atom2_idx, length)
+        self._highlighted_bond: tuple[int, int] | None = None  # Currently clicked bond
+
+        # Measurement mode
+        self._measurement_mode = False
+        self._measurement_points: list[tuple[float, float, float]] = []
 
         # Connect mouse events
         self.mpl_connect('button_press_event', self._on_click)
@@ -321,7 +460,9 @@ class SliceExplorerCanvas(FigureCanvas):
         self.ax.add_collection3d(poly)
 
     def _draw_bonds(self):
-        """Draw bonds between atoms in 3D."""
+        """Draw bonds between atoms in 3D and store bond info for click detection."""
+        self._bonds = []  # Clear previous bonds
+
         if not self._density_cube or not self._density_cube.atoms:
             return
 
@@ -349,13 +490,41 @@ class SliceExplorerCanvas(FigureCanvas):
                 max_bond_dist = (r1 + r2) * 1.3
 
                 if dist < max_bond_dist:
-                    self.ax.plot(
-                        [x1, x2], [y1, y2], [z1_coord, z2_coord],
-                        color='#404040',
-                        linewidth=2,
-                        alpha=0.7,
-                        zorder=1
+                    # Store bond info
+                    self._bonds.append((i, j, dist))
+
+                    # Check if this bond is highlighted
+                    is_highlighted = (
+                        self._highlighted_bond is not None and
+                        ((i, j) == self._highlighted_bond or (j, i) == self._highlighted_bond)
                     )
+
+                    if is_highlighted:
+                        # Highlighted bond: thicker, colored
+                        self.ax.plot(
+                            [x1, x2], [y1, y2], [z1_coord, z2_coord],
+                            color='#FF6600',  # Orange for highlighted
+                            linewidth=4,
+                            alpha=0.9,
+                            zorder=5
+                        )
+                        # Show bond midpoint with density annotation
+                        mid_x, mid_y, mid_z = (x1+x2)/2, (y1+y2)/2, (z1_coord+z2_coord)/2
+                        if self._density_cube:
+                            density = self._density_cube.get_density_at_point(mid_x, mid_y, mid_z)
+                            label = f"{dist:.2f}Å\nρ={density:.3f}"
+                            self.ax.text(mid_x, mid_y, mid_z + 0.3, label,
+                                        fontsize=8, ha='center', color='#FF6600',
+                                        fontweight='bold', zorder=20)
+                    else:
+                        # Normal bond
+                        self.ax.plot(
+                            [x1, x2], [y1, y2], [z1_coord, z2_coord],
+                            color='#404040',
+                            linewidth=2,
+                            alpha=0.7,
+                            zorder=1
+                        )
 
     def _draw_atoms(self):
         """Draw atom positions in 3D with selection highlighting."""
@@ -409,20 +578,17 @@ class SliceExplorerCanvas(FigureCanvas):
                           zorder=10)
 
     def _on_click(self, event):
-        """Handle mouse click for atom picking in 3D.
+        """Handle mouse click for atom/bond picking in 3D.
 
-        Note: We use 'button_press_event' but only handle atom picking.
+        Note: We use 'button_press_event' but only handle atom/bond picking.
         Matplotlib's default 3D rotation (drag) still works because we
-        don't block the event - we just emit a signal if an atom is clicked.
+        don't block the event - we just emit a signal if something is clicked.
         """
         # Only process left button clicks for picking
         if event.button != 1:  # 1 = left button
             return
 
-        if not self._pick_enabled or event.inaxes != self.ax:
-            return
-
-        if not self._atom_positions_3d:
+        if event.inaxes != self.ax:
             return
 
         # Get click position in display coordinates
@@ -430,25 +596,57 @@ class SliceExplorerCanvas(FigureCanvas):
         if click_x is None or click_y is None:
             return
 
-        # Project all atoms to display coordinates and find closest
         from mpl_toolkits.mplot3d import proj3d
 
-        min_dist = float('inf')
-        closest_idx = -1
+        # Check for atom click first (if pick mode enabled)
+        if self._pick_enabled and self._atom_positions_3d:
+            min_dist = float('inf')
+            closest_idx = -1
 
-        for idx, (ax, ay, az) in enumerate(self._atom_positions_3d):
-            # Project 3D point to display coordinates
-            x2d, y2d, _ = proj3d.proj_transform(ax, ay, az, self.ax.get_proj())
-            # Convert to display coordinates
-            x_disp, y_disp = self.ax.transData.transform((x2d, y2d))
-            dist = np.sqrt((x_disp - click_x) ** 2 + (y_disp - click_y) ** 2)
-            if dist < min_dist:
-                min_dist = dist
-                closest_idx = idx
+            for idx, (ax, ay, az) in enumerate(self._atom_positions_3d):
+                x2d, y2d, _ = proj3d.proj_transform(ax, ay, az, self.ax.get_proj())
+                x_disp, y_disp = self.ax.transData.transform((x2d, y2d))
+                dist = np.sqrt((x_disp - click_x) ** 2 + (y_disp - click_y) ** 2)
+                if dist < min_dist:
+                    min_dist = dist
+                    closest_idx = idx
 
-        # Threshold for click detection (in display/pixel units)
-        if closest_idx >= 0 and min_dist < 30:  # 30 pixels threshold
-            self.atom_picked.emit(closest_idx)
+            if closest_idx >= 0 and min_dist < 30:
+                self.atom_picked.emit(closest_idx)
+                return
+
+        # Check for bond click (always enabled when bonds are shown)
+        if self._show_bonds and self._bonds and self._atom_positions_3d:
+            min_dist = float('inf')
+            closest_bond = None
+
+            for i, j, bond_length in self._bonds:
+                if i >= len(self._atom_positions_3d) or j >= len(self._atom_positions_3d):
+                    continue
+
+                # Get bond midpoint
+                ax1, ay1, az1 = self._atom_positions_3d[i]
+                ax2, ay2, az2 = self._atom_positions_3d[j]
+                mid_x, mid_y, mid_z = (ax1+ax2)/2, (ay1+ay2)/2, (az1+az2)/2
+
+                # Project to display coordinates
+                x2d, y2d, _ = proj3d.proj_transform(mid_x, mid_y, mid_z, self.ax.get_proj())
+                x_disp, y_disp = self.ax.transData.transform((x2d, y2d))
+                dist = np.sqrt((x_disp - click_x) ** 2 + (y_disp - click_y) ** 2)
+
+                if dist < min_dist:
+                    min_dist = dist
+                    closest_bond = (i, j, bond_length)
+
+            if closest_bond and min_dist < 40:  # 40 pixels threshold for bonds
+                i, j, bond_length = closest_bond
+                # Toggle highlight
+                if self._highlighted_bond == (i, j) or self._highlighted_bond == (j, i):
+                    self._highlighted_bond = None
+                else:
+                    self._highlighted_bond = (i, j)
+                self._draw_slices()
+                self.bond_clicked.emit(i, j, bond_length)
 
     def _on_scroll(self, event):
         """Handle scroll wheel for zoom."""
@@ -645,6 +843,75 @@ class SliceExplorerCanvas(FigureCanvas):
         if self._density_cube:
             self._draw_slices()
 
+    def get_current_slice_data(self) -> tuple[np.ndarray, float] | None:
+        """Get the data for the currently highlighted slice.
+
+        Returns:
+            (slice_data, z_coord) or None if no data
+        """
+        if not self._density_cube:
+            return None
+        slices = self._density_cube.get_z_slices(self._n_slices)
+        if not slices or self._highlighted_slice >= len(slices):
+            return None
+        return slices[self._highlighted_slice]
+
+    def get_density_type(self) -> str:
+        """Get current density type."""
+        return self._density_type
+
+    def get_color_mode(self) -> str:
+        """Get current color mode."""
+        return self._color_mode
+
+    def get_contour_scale(self) -> float:
+        """Get current contour scale."""
+        return self._contour_scale
+
+    def get_density_cube(self) -> DensityCube | None:
+        """Get the current density cube."""
+        return self._density_cube
+
+    def clear_bond_highlight(self):
+        """Clear any highlighted bond."""
+        if self._highlighted_bond is not None:
+            self._highlighted_bond = None
+            if self._density_cube:
+                self._draw_slices()
+
+    def get_bond_info(self, atom1_idx: int, atom2_idx: int) -> dict | None:
+        """Get detailed info about a bond.
+
+        Returns dict with: length, midpoint, density_at_midpoint, atom1_symbol, atom2_symbol
+        """
+        if not self._density_cube or not self._density_cube.atoms:
+            return None
+
+        atoms = self._density_cube.atoms
+        if atom1_idx >= len(atoms) or atom2_idx >= len(atoms):
+            return None
+
+        bohr_to_ang = 0.529177
+        z1, x1, y1, z1c = atoms[atom1_idx]
+        z2, x2, y2, z2c = atoms[atom2_idx]
+
+        x1, y1, z1c = x1 * bohr_to_ang, y1 * bohr_to_ang, z1c * bohr_to_ang
+        x2, y2, z2c = x2 * bohr_to_ang, y2 * bohr_to_ang, z2c * bohr_to_ang
+
+        length = np.sqrt((x2-x1)**2 + (y2-y1)**2 + (z2c-z1c)**2)
+        mid_x, mid_y, mid_z = (x1+x2)/2, (y1+y2)/2, (z1c+z2c)/2
+        density = self._density_cube.get_density_at_point(mid_x, mid_y, mid_z)
+
+        return {
+            'length': length,
+            'midpoint': (mid_x, mid_y, mid_z),
+            'density': density,
+            'atom1_symbol': Z_TO_SYMBOL.get(z1, '?'),
+            'atom2_symbol': Z_TO_SYMBOL.get(z2, '?'),
+            'atom1_z': z1,
+            'atom2_z': z2,
+        }
+
 
 class SliceExplorer(QWidget):
     """Interactive 3D Slice Explorer widget."""
@@ -653,6 +920,16 @@ class SliceExplorer(QWidget):
         super().__init__(parent)
         self._promolecule_cube: DensityCube | None = None
         self._deformation_cube: DensityCube | None = None
+
+        # Animation state
+        self._animation_timer = QTimer(self)
+        self._animation_timer.timeout.connect(self._animation_step)
+        self._animation_progress = 0.0
+        self._animation_direction = 1  # 1 = forward (pro->def), -1 = backward
+        self._is_animating = False
+
+        # 2D preview dialog (lazy init)
+        self._preview_dialog: Slice2DPreviewDialog | None = None
 
         self._setup_ui()
 
@@ -858,6 +1135,25 @@ class SliceExplorer(QWidget):
         reset_btn.clicked.connect(self.canvas.reset_view)
         row2.addWidget(reset_btn)
 
+        # Separator
+        sep4 = QFrame()
+        sep4.setFrameShape(QFrame.Shape.VLine)
+        sep4.setFrameShadow(QFrame.Shadow.Sunken)
+        row2.addWidget(sep4)
+
+        # View 2D button
+        self.view_2d_btn = QPushButton("View 2D")
+        self.view_2d_btn.setToolTip("Show current slice as a 2D contour plot")
+        self.view_2d_btn.clicked.connect(self._show_2d_preview)
+        row2.addWidget(self.view_2d_btn)
+
+        # Animate button (morph between promolecule and deformation)
+        self.animate_btn = QPushButton("Animate")
+        self.animate_btn.setToolTip("Animate transition between promolecule and deformation density")
+        self.animate_btn.setCheckable(True)
+        self.animate_btn.clicked.connect(self._toggle_animation)
+        row2.addWidget(self.animate_btn)
+
         layout.addLayout(row2)
 
     def set_density_cubes(self, promolecule: DensityCube | None = None,
@@ -944,3 +1240,98 @@ class SliceExplorer(QWidget):
         self.canvas._density_cube = None
         self.canvas._setup_3d_axes()
         self.canvas.draw()
+        self._stop_animation()
+
+    def _show_2d_preview(self):
+        """Show the current slice in a 2D preview dialog."""
+        slice_result = self.canvas.get_current_slice_data()
+        if slice_result is None:
+            return
+
+        z_coord, slice_data = slice_result
+        cube = self.canvas.get_density_cube()
+
+        if self._preview_dialog is None:
+            self._preview_dialog = Slice2DPreviewDialog(self)
+
+        self._preview_dialog.show_slice(
+            slice_data=slice_data,
+            z_coord=z_coord,
+            density_type=self.canvas.get_density_type(),
+            color_mode=self.canvas.get_color_mode(),
+            atoms=cube.atoms if cube else None,
+            contour_scale=self.canvas.get_contour_scale(),
+            origin=cube.origin if cube else None,
+            axes=cube.axes if cube else None,
+        )
+        self._preview_dialog.show()
+        self._preview_dialog.raise_()
+
+    def _toggle_animation(self, checked: bool):
+        """Start or stop the density animation."""
+        if checked:
+            self._start_animation()
+        else:
+            self._stop_animation()
+
+    def _start_animation(self):
+        """Start animating between promolecule and deformation density."""
+        if not self._promolecule_cube or not self._deformation_cube:
+            self.animate_btn.setChecked(False)
+            return
+
+        self._is_animating = True
+        self._animation_progress = 0.0
+        self._animation_direction = 1
+        self._animation_timer.start(100)  # 100ms per frame = 10 fps
+
+    def _stop_animation(self):
+        """Stop the density animation."""
+        self._animation_timer.stop()
+        self._is_animating = False
+        self.animate_btn.setChecked(False)
+
+    def _animation_step(self):
+        """One step of the animation - blend between densities."""
+        if not self._promolecule_cube or not self._deformation_cube:
+            self._stop_animation()
+            return
+
+        # Update progress
+        self._animation_progress += 0.05 * self._animation_direction
+
+        # Reverse at boundaries
+        if self._animation_progress >= 1.0:
+            self._animation_progress = 1.0
+            self._animation_direction = -1
+        elif self._animation_progress <= 0.0:
+            self._animation_progress = 0.0
+            self._animation_direction = 1
+
+        # Create blended density cube
+        t = self._animation_progress
+        # Blend: at t=0 show promolecule, at t=1 show molecular (promolecule + deformation)
+        # This shows the "formation of bonds" effect
+        blended_data = self._promolecule_cube.data + t * self._deformation_cube.data
+
+        blended_cube = DensityCube(
+            origin=self._promolecule_cube.origin,
+            axes=self._promolecule_cube.axes,
+            data=blended_data,
+            atoms=self._promolecule_cube.atoms,
+        )
+
+        # Update display
+        density_type = "deformation" if t > 0.5 else "promolecule"
+        self.canvas.set_density_cube(blended_cube, density_type)
+
+        # Update combo to show progress
+        self.density_combo.blockSignals(True)
+        if t < 0.5:
+            self.density_combo.setCurrentText("Promolecule")
+        else:
+            # Try to select Deformation if available
+            idx = self.density_combo.findText("Deformation")
+            if idx >= 0:
+                self.density_combo.setCurrentIndex(idx)
+        self.density_combo.blockSignals(False)

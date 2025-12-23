@@ -6,7 +6,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 
 ## Current Status
 
-**Version:** 0.3.8 (Development)
+**Version:** 0.4.0 (Development)
 
 ### What's Working
 
@@ -194,6 +194,18 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 ---
 
 ## Changelog
+
+### v0.4.0 (December 2024)
+- **View 2D Button**: Opens current slice as a 2D contour plot with atom positions overlaid
+- **Animate Button**: Smooth animation morphing from promolecule → molecular density
+  - Shows how electron density changes when bonds form
+  - Helps students understand deformation density concept
+- **Click on Bonds**: Click any bond to see length and local density
+  - Highlighted bonds show distance (Å) and density (e/Bohr³)
+  - Click again to deselect
+- **Improved Slice Range**: Slices now cover molecule extent (0.5Å padding) instead of full cube
+- **Density at Point**: New `get_density_at_point()` API for querying density values
+- **2D Preview shows atoms**: Atoms within 0.5Å of slice are overlaid on contour plot
 
 ### v0.3.8 (December 2024)
 - **Improved 3D Explorer UI**: Reorganized into cleaner two-row layout

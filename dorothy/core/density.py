@@ -71,8 +71,8 @@ class DensityCube:
         # Determine Z range based on atom positions (molecule extent)
         if self.atoms:
             atom_z = np.array([a[3] for a in self.atoms]) * bohr_to_ang
-            z_min = atom_z.min() - 1.0  # Add 1 Angstrom padding
-            z_max = atom_z.max() + 1.0
+            z_min = atom_z.min() - 0.5  # Add 0.5 Angstrom padding
+            z_max = atom_z.max() + 0.5
         else:
             # Fallback to full cube extent
             z_min = self.origin[2] * bohr_to_ang
@@ -92,6 +92,50 @@ class DensityCube:
             slices.append((z_ang, slice_data))
 
         return slices
+
+    def get_molecule_extent(self) -> tuple[np.ndarray, np.ndarray]:
+        """Get the min/max coordinates of atoms in Angstrom.
+
+        Returns:
+            (min_coords, max_coords) as (3,) arrays in Angstrom
+        """
+        bohr_to_ang = 0.529177
+        if not self.atoms:
+            # Fallback to grid extent
+            min_c = self.origin * bohr_to_ang
+            max_c = (self.origin + np.array(self.shape) * np.diag(self.axes)) * bohr_to_ang
+            return min_c, max_c
+
+        coords = np.array([[a[1], a[2], a[3]] for a in self.atoms]) * bohr_to_ang
+        return coords.min(axis=0), coords.max(axis=0)
+
+    def get_density_at_point(self, x: float, y: float, z: float) -> float:
+        """Get interpolated density at a point in Angstrom coordinates.
+
+        Args:
+            x, y, z: Coordinates in Angstrom
+
+        Returns:
+            Density value (in e/Bohr³)
+        """
+        bohr_to_ang = 0.529177
+        # Convert to Bohr
+        x_bohr = x / bohr_to_ang
+        y_bohr = y / bohr_to_ang
+        z_bohr = z / bohr_to_ang
+
+        # Convert to grid indices
+        ix = (x_bohr - self.origin[0]) / self.axes[0, 0]
+        iy = (y_bohr - self.origin[1]) / self.axes[1, 1]
+        iz = (z_bohr - self.origin[2]) / self.axes[2, 2]
+
+        # Clamp to valid range
+        ix = max(0, min(ix, self.shape[0] - 1))
+        iy = max(0, min(iy, self.shape[1] - 1))
+        iz = max(0, min(iz, self.shape[2] - 1))
+
+        # Simple nearest-neighbor for now
+        return self.data[int(round(ix)), int(round(iy)), int(round(iz))]
 
 
 def parse_cube_file(filepath: Path) -> Optional[DensityCube]:
