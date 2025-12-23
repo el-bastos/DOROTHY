@@ -80,29 +80,43 @@ class DensityCube:
     def get_oriented_slices(
         self,
         n_slices: int,
-        plane_normal: np.ndarray
+        plane_definition
     ) -> tuple[list[tuple[float, np.ndarray]], dict]:
         """
-        Get slices perpendicular to a custom plane normal.
+        Get slices perpendicular to a custom plane.
 
         This method samples the density cube along slices that are
-        perpendicular to the given normal vector, allowing visualization
-        from any orientation (not just along the Z-axis).
+        perpendicular to the given plane normal, using the provided
+        u/v axes for orientation and center for positioning.
 
         Args:
             n_slices: Number of slices to extract
-            plane_normal: Unit vector defining slice orientation (in Angstrom space)
+            plane_definition: Either a PlaneDefinition object (from SelectionManager)
+                            or a np.ndarray normal vector (backward compatible)
 
         Returns:
             Tuple of:
             - List of (offset, 2D_array) tuples where offset is the distance
-              along the normal from the molecule center
-            - Dict with 'normal', 'u', 'v' basis vectors and 'extent' for positioning
+              along the normal from the plane center
+            - Dict with 'normal', 'u', 'v' basis vectors, 'center', and 'extent'
         """
         from scipy.interpolate import RegularGridInterpolator
 
-        # Normalize the plane normal
-        normal = plane_normal / np.linalg.norm(plane_normal)
+        # Handle both PlaneDefinition objects and raw normal vectors
+        if hasattr(plane_definition, 'normal'):
+            # PlaneDefinition object
+            normal = plane_definition.normal / np.linalg.norm(plane_definition.normal)
+            u = plane_definition.u_axis
+            v = plane_definition.v_axis
+            user_center = plane_definition.center
+            use_user_center = True
+        else:
+            # Raw normal vector (backward compatibility)
+            normal = plane_definition / np.linalg.norm(plane_definition)
+            u = None
+            v = None
+            user_center = None
+            use_user_center = False
 
         # Convert grid parameters to Angstrom
         bohr_to_ang = 0.529177
@@ -125,19 +139,26 @@ class DensityCube:
             fill_value=0.0
         )
 
-        # Calculate molecule center and extent along normal
-        if self.atoms:
+        # Determine center point
+        if use_user_center:
+            center_3d = user_center
+        elif self.atoms:
             atom_coords = np.array([(a[1], a[2], a[3]) for a in self.atoms]) * bohr_to_ang
             center_3d = atom_coords.mean(axis=0)
-            projections = (atom_coords - center_3d) @ normal
-            min_proj = projections.min() - 1.0  # Add padding
-            max_proj = projections.max() + 1.0
         else:
             center_3d = np.array([
                 (x_coords[0] + x_coords[-1]) / 2,
                 (y_coords[0] + y_coords[-1]) / 2,
                 (z_coords[0] + z_coords[-1]) / 2,
             ])
+
+        # Calculate extent along normal for slice distribution
+        if self.atoms:
+            atom_coords = np.array([(a[1], a[2], a[3]) for a in self.atoms]) * bohr_to_ang
+            projections = (atom_coords - center_3d) @ normal
+            min_proj = projections.min() - 1.0  # Add padding
+            max_proj = projections.max() + 1.0
+        else:
             corners = np.array([
                 [x_coords[0], y_coords[0], z_coords[0]],
                 [x_coords[-1], y_coords[0], z_coords[0]],
@@ -149,16 +170,17 @@ class DensityCube:
             min_proj = projections.min()
             max_proj = projections.max()
 
-        # Create orthonormal basis for the slice plane
-        # Find a vector not parallel to normal
-        if abs(normal[2]) < 0.9:
-            ref = np.array([0.0, 0.0, 1.0])
-        else:
-            ref = np.array([1.0, 0.0, 0.0])
+        # Create orthonormal basis for the slice plane if not provided
+        if u is None or v is None:
+            # Find a vector not parallel to normal
+            if abs(normal[2]) < 0.9:
+                ref = np.array([0.0, 0.0, 1.0])
+            else:
+                ref = np.array([1.0, 0.0, 0.0])
 
-        u = np.cross(normal, ref)
-        u = u / np.linalg.norm(u)
-        v = np.cross(normal, u)
+            u = np.cross(normal, ref)
+            u = u / np.linalg.norm(u)
+            v = np.cross(normal, u)
 
         # Determine slice sampling resolution
         grid_spacing = min(
@@ -174,7 +196,7 @@ class DensityCube:
         n_points = int(extent / grid_spacing) + 1
         n_points = min(n_points, 200)  # Cap for performance
 
-        # Generate slice offsets (relative to molecule center)
+        # Generate slice offsets (relative to center)
         offsets = np.linspace(min_proj, max_proj, n_slices)
 
         slices = []
@@ -348,11 +370,18 @@ def calculate_deformation_density(
         molecular_density.shape,
     )
 
-    # Normalize promolecule to have same total electrons
-    mol_sum = np.sum(molecular_density.data)
-    pro_sum = np.sum(promolecule)
-    if pro_sum > 0:
-        promolecule *= mol_sum / pro_sum
+    # Calculate volume element for proper integration
+    # Volume = det(axes) for each grid cell (in Bohr^3)
+    dV = abs(np.linalg.det(molecular_density.axes))
+
+    # Normalize promolecule to have same integrated electron count
+    # ∫ρ dV = Σ ρ_i * dV, so we compare sums directly (dV cancels)
+    mol_integral = np.sum(molecular_density.data) * dV
+    pro_integral = np.sum(promolecule) * dV
+
+    if pro_integral > 0:
+        # Scale promolecule so integrated density matches molecular
+        promolecule *= mol_integral / pro_integral
 
     deformation_data = molecular_density.data - promolecule
 

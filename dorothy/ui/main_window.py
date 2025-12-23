@@ -924,13 +924,15 @@ class MainWindow(QMainWindow):
         self.molecule_viewer.canvas.set_selection(indices)
         self.slice_explorer.canvas.set_selection(indices)
 
-        # Update status
+        # Update status with 4-atom selection info
         if len(indices) == 0:
-            hint = "Click atoms to define slice plane (3 needed)"
+            hint = "Click 4 atoms: 3 for plane + 1 for orientation"
         elif len(indices) < 3:
-            hint = f"Selected {len(indices)}/3 atoms for plane definition"
+            hint = f"Selected {len(indices)}/4 atoms (need 3 for plane)"
+        elif len(indices) == 3:
+            hint = f"Selected 3/4 atoms (select 1 more for 'up' direction)"
         else:
-            hint = "Plane defined! Slices reoriented."
+            hint = "Plane defined! Slices centered on selected atoms."
 
         # Show hint in info label temporarily
         if self.selected_molecule:
@@ -938,9 +940,10 @@ class MainWindow(QMainWindow):
                 f"{self.selected_molecule.formula} - {hint}"
             )
 
-    def _on_plane_defined(self, normal):
-        """Handle plane definition from 3 selected atoms."""
-        self.slice_explorer.canvas.set_custom_plane(normal)
+    def _on_plane_defined(self, plane_definition):
+        """Handle plane definition from 4 selected atoms."""
+        # plane_definition is now a PlaneDefinition object with normal, u_axis, v_axis, center
+        self.slice_explorer.canvas.set_custom_plane(plane_definition)
 
     def _clear_atom_selection(self):
         """Clear current atom selection."""

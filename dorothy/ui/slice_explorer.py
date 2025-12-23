@@ -52,8 +52,8 @@ class SliceExplorerCanvas(FigureCanvas):
         self._pick_enabled = False
         self._atom_positions_3d: list[tuple[float, float, float]] = []
 
-        # Custom plane for slicing
-        self._custom_plane_normal: np.ndarray | None = None
+        # Custom plane for slicing (PlaneDefinition or np.ndarray normal or None)
+        self._custom_plane_definition = None
 
         # Zoom state
         self._zoom_level = 1.0
@@ -62,9 +62,17 @@ class SliceExplorerCanvas(FigureCanvas):
         # Show bonds when deformation density is available
         self._show_bonds = True
 
+        # Density hover display
+        self._show_density_on_hover = False
+        self._density_text = None
+
+        # Contour level scale (1.0 = default, <1 = tighter/more, >1 = looser/fewer)
+        self._contour_scale = 1.0
+
         # Connect mouse events
         self.mpl_connect('button_press_event', self._on_click)
         self.mpl_connect('scroll_event', self._on_scroll)
+        self.mpl_connect('motion_notify_event', self._on_motion)
 
         self._setup_3d_axes()
 
@@ -133,10 +141,10 @@ class SliceExplorerCanvas(FigureCanvas):
 
         # Get slices - use custom plane if defined
         basis_info = None
-        if self._custom_plane_normal is not None:
+        if self._custom_plane_definition is not None:
             slices, basis_info = self._density_cube.get_oriented_slices(
                 self._n_slices,
-                self._custom_plane_normal
+                self._custom_plane_definition
             )
             use_custom_plane = True
         else:
@@ -152,23 +160,41 @@ class SliceExplorerCanvas(FigureCanvas):
         y_extent = ny * axes[1, 1]
 
         # Determine contour levels based on density type
+        # Scale factor: <1 = tighter (more contours, lower values), >1 = looser (fewer, higher values)
+        scale = self._contour_scale
+        all_data = np.concatenate([s.flatten() for _, s in slices])
+
         if self._density_type == "deformation":
-            all_data = np.concatenate([s.flatten() for _, s in slices])
             max_abs = max(abs(all_data.min()), abs(all_data.max()))
-            if max_abs > 0:
-                levels_pos = [0.005, 0.01, 0.02, 0.04, 0.08]
-                levels_neg = [-0.08, -0.04, -0.02, -0.01, -0.005]
+            if max_abs > 0.001:
+                # Base levels scaled - scale affects the threshold values
+                base_levels = np.array([0.005, 0.01, 0.02, 0.04, 0.08])
+                levels_pos = list(base_levels * scale)
+                levels_neg = list(-base_levels[::-1] * scale)
             else:
                 levels_pos = []
                 levels_neg = []
         else:
-            all_data = np.concatenate([s.flatten() for _, s in slices])
+            # Promolecule density
             max_val = all_data.max()
-            if max_val > 0:
-                levels_pos = np.linspace(max_val * 0.05, max_val * 0.8, 5)
+            min_val = max(0.001, all_data[all_data > 0].min()) if np.any(all_data > 0) else 0.001
+            if max_val > 0.001:
+                # Generate contours from min to max, scaled
+                # More contours when scale < 1, fewer when scale > 1
+                n_contours = max(3, int(7 / scale))
+                # Start from a fraction of max, go up to 80% of max
+                start = max_val * 0.02 * scale
+                end = max_val * 0.8
+                if start < end:
+                    levels_pos = list(np.linspace(start, end, n_contours))
+                else:
+                    levels_pos = [max_val * 0.5]
             else:
                 levels_pos = []
             levels_neg = []
+
+        # Debug: print levels
+        # print(f"Density type: {self._density_type}, max: {all_data.max():.4f}, levels_pos: {levels_pos[:3] if levels_pos else 'none'}")
 
         # Draw each slice
         if use_custom_plane and basis_info:
@@ -361,35 +387,39 @@ class SliceExplorerCanvas(FigureCanvas):
         # The data shape should match (nx, ny) where X is (nx, ny) and Y is (nx, ny)
 
         # Draw positive contours
-        if len(levels_pos) > 0 and slice_data.max() > min(levels_pos):
-            try:
-                self.ax.contour(
-                    X, Y, slice_data,
-                    levels=levels_pos,
-                    zdir='z',
-                    offset=z_coord,
-                    colors='#000000' if self._color_mode == 'bw' else '#2563eb',
-                    linewidths=2.0 if is_highlighted else 0.6,
-                    alpha=1.0 if is_highlighted else 0.4
-                )
-            except Exception:
-                pass
+        if levels_pos and len(levels_pos) > 0:
+            valid_levels = [l for l in levels_pos if l < slice_data.max()]
+            if valid_levels:
+                try:
+                    self.ax.contour(
+                        X, Y, slice_data,
+                        levels=valid_levels,
+                        zdir='z',
+                        offset=z_coord,
+                        colors='#000000' if self._color_mode == 'bw' else '#2563eb',
+                        linewidths=2.0 if is_highlighted else 0.6,
+                        alpha=1.0 if is_highlighted else 0.4
+                    )
+                except Exception as e:
+                    print(f"Contour error (pos): {e}")
 
         # Draw negative contours (for deformation density)
-        if len(levels_neg) > 0 and slice_data.min() < max(levels_neg):
-            try:
-                self.ax.contour(
-                    X, Y, slice_data,
-                    levels=levels_neg,
-                    zdir='z',
-                    offset=z_coord,
-                    colors='#666666' if self._color_mode == 'bw' else '#dc2626',
-                    linestyles='dashed',
-                    linewidths=2.0 if is_highlighted else 0.6,
-                    alpha=1.0 if is_highlighted else 0.4
-                )
-            except Exception:
-                pass
+        if levels_neg and len(levels_neg) > 0:
+            valid_levels = [l for l in levels_neg if l > slice_data.min()]
+            if valid_levels:
+                try:
+                    self.ax.contour(
+                        X, Y, slice_data,
+                        levels=valid_levels,
+                        zdir='z',
+                        offset=z_coord,
+                        colors='#666666' if self._color_mode == 'bw' else '#dc2626',
+                        linestyles='dashed',
+                        linewidths=2.0 if is_highlighted else 0.6,
+                        alpha=1.0 if is_highlighted else 0.4
+                    )
+                except Exception as e:
+                    print(f"Contour error (neg): {e}")
 
     def _draw_slice_plane(self, X, Y, z_coord, slice_data, alpha, is_highlighted):
         """Draw a semi-transparent slice plane as a simple rectangle."""
@@ -563,6 +593,58 @@ class SliceExplorerCanvas(FigureCanvas):
         self._zoom_level = max(0.2, min(5.0, self._zoom_level))
         self._apply_zoom()
 
+    def _on_motion(self, event):
+        """Handle mouse motion for density hover display."""
+        if not self._show_density_on_hover:
+            return
+
+        if event.inaxes != self.ax or not self._density_cube:
+            if self._density_text:
+                self._density_text.set_visible(False)
+                self.draw_idle()
+            return
+
+        # For 3D, we can't easily get density under cursor
+        # Instead, show density info in a fixed position
+        # This requires tracking the current slice data
+        # For now, we'll display general stats
+        if self._density_text is None:
+            self._density_text = self.fig.text(
+                0.02, 0.98, '',
+                fontsize=9,
+                verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8)
+            )
+
+        # Show density range info
+        data = self._density_cube.data
+        info = (
+            f"Density range:\n"
+            f"  min: {data.min():.4f} e/Å³\n"
+            f"  max: {data.max():.4f} e/Å³\n"
+            f"  sum: {data.sum() * 0.529177**3:.1f} e"
+        )
+        self._density_text.set_text(info)
+        self._density_text.set_visible(True)
+        self.draw_idle()
+
+    def set_show_density_hover(self, show: bool):
+        """Enable or disable density display on hover."""
+        self._show_density_on_hover = show
+        if not show and self._density_text:
+            self._density_text.set_visible(False)
+            self.draw_idle()
+
+    def set_contour_scale(self, scale: float):
+        """Set contour level scale (0.25-4.0).
+
+        Args:
+            scale: <1 = tighter/more contours, >1 = looser/fewer contours
+        """
+        self._contour_scale = max(0.25, min(4.0, scale))
+        if self._density_cube:
+            self._draw_slices()
+
     def _apply_zoom(self):
         """Apply current zoom level to axis limits."""
         if self._base_limits is None:
@@ -639,9 +721,14 @@ class SliceExplorerCanvas(FigureCanvas):
         """Enable or disable atom picking."""
         self._pick_enabled = enabled
 
-    def set_custom_plane(self, normal: np.ndarray | None):
-        """Set custom slicing plane and redraw."""
-        self._custom_plane_normal = normal
+    def set_custom_plane(self, plane_definition):
+        """Set custom slicing plane and redraw.
+
+        Args:
+            plane_definition: Either a PlaneDefinition object (with normal, u_axis, v_axis, center)
+                            or a np.ndarray normal vector, or None to reset
+        """
+        self._custom_plane_definition = plane_definition
         if self._density_cube:
             self._draw_slices()
 
@@ -738,7 +825,34 @@ class SliceExplorer(QWidget):
         self.bonds_check.setChecked(True)
         self.bonds_check.stateChanged.connect(self._on_bonds_toggled)
         contour_group.addWidget(self.bonds_check)
+
+        self.density_info_check = QCheckBox("Density Info")
+        self.density_info_check.setChecked(False)
+        self.density_info_check.setToolTip("Show electron density statistics")
+        self.density_info_check.stateChanged.connect(self._on_density_info_toggled)
+        contour_group.addWidget(self.density_info_check)
         controls.addLayout(contour_group)
+
+        # Contour scale slider
+        contour_scale_group = QVBoxLayout()
+        contour_scale_label = QLabel("Contours:")
+        contour_scale_label.setStyleSheet("font-weight: bold; font-size: 10pt;")
+        contour_scale_group.addWidget(contour_scale_label)
+
+        contour_row = QHBoxLayout()
+        self.contour_scale_slider = QSlider(Qt.Orientation.Horizontal)
+        self.contour_scale_slider.setMinimum(25)  # 0.25x
+        self.contour_scale_slider.setMaximum(200)  # 2.0x
+        self.contour_scale_slider.setValue(100)  # 1.0x (default)
+        self.contour_scale_slider.setToolTip("Adjust contour spacing: left=tighter, right=looser")
+        self.contour_scale_slider.valueChanged.connect(self._on_contour_scale_changed)
+        contour_row.addWidget(self.contour_scale_slider)
+
+        self.contour_scale_label = QLabel("1.0x")
+        self.contour_scale_label.setMinimumWidth(35)
+        contour_row.addWidget(self.contour_scale_label)
+        contour_scale_group.addLayout(contour_row)
+        controls.addLayout(contour_scale_group)
 
         # Zoom controls
         zoom_group = QVBoxLayout()
@@ -848,6 +962,16 @@ class SliceExplorer(QWidget):
     def _on_contours_toggled(self, state: int):
         """Handle contours checkbox toggle."""
         self.canvas.set_show_contours(state == Qt.CheckState.Checked.value)
+
+    def _on_density_info_toggled(self, state: int):
+        """Handle density info checkbox toggle."""
+        self.canvas.set_show_density_hover(state == Qt.CheckState.Checked.value)
+
+    def _on_contour_scale_changed(self, value: int):
+        """Handle contour scale slider change."""
+        scale = value / 100.0
+        self.contour_scale_label.setText(f"{scale:.1f}x")
+        self.canvas.set_contour_scale(scale)
 
     def _on_bonds_toggled(self, state: int):
         """Handle bonds checkbox toggle."""

@@ -6,7 +6,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 
 ## Current Status
 
-**Version:** 0.3.0 (Development)
+**Version:** 0.3.1 (Development)
 
 ### What's Working
 
@@ -15,7 +15,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 - **CIF Parser** - Extracts atomic coordinates, cell parameters, space groups
 - **2D Molecule Viewer** - Bond detection, CPK coloring, interactive atom selection
 - **3D Slice Explorer** - Interactive 3D preview with zoom, bonds, and custom orientation
-- **Interactive Plane Selection** - Click 3 atoms to define custom slicing plane
+- **Interactive Plane Selection** - Click 4 atoms to define custom slicing plane (3 for plane + 1 for orientation)
 - **Auto xTB on 3D View** - Automatically calculates deformation density when switching to 3D
 - **Generation Pipeline** - Promolecule density calculation, contour slicing, PDF export
 - **Principal Axes Alignment** - Molecules auto-rotated for optimal slicing orientation
@@ -193,8 +193,15 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 
 ## Changelog
 
+### v0.3.1 (December 2024)
+- 4-atom plane selection: 3 atoms define plane, 4th defines "up" direction, center is centroid
+- Contour level slider: adjust contour spacing (tighter/looser)
+- Density info display: toggle to show min/max/total electron density
+- Improved density normalization using proper volume integration
+- Fixed contour rendering with valid level filtering
+
 ### v0.3.0 (December 2024)
-- Interactive plane selection: click 3 atoms in 2D or 3D view to define custom slicing orientation
+- Interactive plane selection: click atoms in 2D or 3D view to define custom slicing orientation
 - Auto-run xTB when switching to 3D view (with progress indicator)
 - Zoom controls for 3D cube view (+/- buttons, scroll wheel, reset)
 - Rotation controls for 3D view (arrow buttons + drag-to-rotate)
