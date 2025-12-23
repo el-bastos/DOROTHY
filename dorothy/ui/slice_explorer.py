@@ -289,42 +289,31 @@ class SliceExplorerCanvas(FigureCanvas):
         # Draw the plane first
         self._draw_oriented_plane(X, Y, Z, alpha * 0.3, is_highlighted)
 
-        # Draw positive contours using surface plot approach
+        ni, nj = slice_data.shape
+
+        # Draw positive contours
         if len(levels_pos) > 0 and slice_data.max() > min(levels_pos):
             try:
-                # For oriented slices, we can't use offset parameter
-                # Instead, we plot the contours in 3D directly
-                import matplotlib.pyplot as plt
-                from matplotlib import cm
-
                 # Get contour lines in 2D, then map to 3D
                 fig_temp = plt.figure()
                 ax_temp = fig_temp.add_subplot(111)
                 cs = ax_temp.contour(slice_data, levels=levels_pos)
                 plt.close(fig_temp)
 
-                for collection in cs.collections:
-                    for path in collection.get_paths():
-                        vertices = path.vertices
-                        if len(vertices) > 1:
-                            # Map 2D contour indices to 3D coordinates
-                            ni, nj = slice_data.shape
-                            xs = []
-                            ys = []
-                            zs = []
-                            for vi, vj in vertices:
-                                # vi, vj are in array index space
-                                ii = int(np.clip(vi, 0, ni - 1))
-                                jj = int(np.clip(vj, 0, nj - 1))
-                                xs.append(X[ii, jj])
-                                ys.append(Y[ii, jj])
-                                zs.append(Z[ii, jj])
+                # Extract contour segments (compatible with matplotlib 3.8+)
+                segments = self._extract_contour_segments(cs)
+
+                for seg in segments:
+                    if len(seg) > 1:
+                        # Use bilinear interpolation for smooth 3D coordinates
+                        xs, ys, zs = self._interpolate_contour_to_3d(seg, X, Y, Z)
+                        if len(xs) > 1:
                             self.ax.plot(xs, ys, zs,
                                        color='#000000' if self._color_mode == 'bw' else '#2563eb',
                                        linewidth=2.0 if is_highlighted else 0.6,
                                        alpha=1.0 if is_highlighted else 0.4)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Error drawing positive contours: {e}")
 
         # Draw negative contours
         if len(levels_neg) > 0 and slice_data.min() < max(levels_neg):
@@ -334,27 +323,84 @@ class SliceExplorerCanvas(FigureCanvas):
                 cs = ax_temp.contour(slice_data, levels=levels_neg)
                 plt.close(fig_temp)
 
-                for collection in cs.collections:
-                    for path in collection.get_paths():
-                        vertices = path.vertices
-                        if len(vertices) > 1:
-                            ni, nj = slice_data.shape
-                            xs = []
-                            ys = []
-                            zs = []
-                            for vi, vj in vertices:
-                                ii = int(np.clip(vi, 0, ni - 1))
-                                jj = int(np.clip(vj, 0, nj - 1))
-                                xs.append(X[ii, jj])
-                                ys.append(Y[ii, jj])
-                                zs.append(Z[ii, jj])
+                segments = self._extract_contour_segments(cs)
+
+                for seg in segments:
+                    if len(seg) > 1:
+                        xs, ys, zs = self._interpolate_contour_to_3d(seg, X, Y, Z)
+                        if len(xs) > 1:
                             self.ax.plot(xs, ys, zs,
                                        color='#666666' if self._color_mode == 'bw' else '#dc2626',
                                        linestyle='--',
                                        linewidth=2.0 if is_highlighted else 0.6,
                                        alpha=1.0 if is_highlighted else 0.4)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Error drawing negative contours: {e}")
+
+    def _interpolate_contour_to_3d(self, seg, X, Y, Z):
+        """Interpolate 2D contour coordinates to 3D using bilinear interpolation.
+
+        Args:
+            seg: Array of (x, y) = (col, row) = (j, i) fractional coordinates from matplotlib contour
+            X, Y, Z: 3D coordinate grids for the slice, indexed as [i, j]
+
+        Returns:
+            xs, ys, zs: Lists of interpolated 3D coordinates
+        """
+        ni, nj = X.shape
+        xs = []
+        ys = []
+        zs = []
+
+        for cj, ci in seg:  # matplotlib returns (x, y) = (col, row) = (j, i)
+            # Clamp to valid range (leaving room for interpolation)
+            ci = np.clip(ci, 0, ni - 1.001)
+            cj = np.clip(cj, 0, nj - 1.001)
+
+            # Get integer indices and fractional parts
+            i0 = int(ci)
+            j0 = int(cj)
+            i1 = min(i0 + 1, ni - 1)
+            j1 = min(j0 + 1, nj - 1)
+
+            # Fractional parts for interpolation
+            fi = ci - i0
+            fj = cj - j0
+
+            # Bilinear interpolation for each coordinate
+            def bilinear(arr):
+                return (arr[i0, j0] * (1 - fi) * (1 - fj) +
+                        arr[i1, j0] * fi * (1 - fj) +
+                        arr[i0, j1] * (1 - fi) * fj +
+                        arr[i1, j1] * fi * fj)
+
+            xs.append(bilinear(X))
+            ys.append(bilinear(Y))
+            zs.append(bilinear(Z))
+
+        return xs, ys, zs
+
+    def _extract_contour_segments(self, contour_set) -> list:
+        """Extract contour line segments from a ContourSet.
+
+        Compatible with both old (matplotlib < 3.8) and new (3.8+) APIs.
+        """
+        segments = []
+
+        # New API (matplotlib 3.8+): use allsegs
+        if hasattr(contour_set, 'allsegs'):
+            for level_segs in contour_set.allsegs:
+                for seg in level_segs:
+                    if len(seg) > 0:
+                        segments.append(seg)
+        # Old API: use collections
+        elif hasattr(contour_set, 'collections'):
+            for collection in contour_set.collections:
+                for path in collection.get_paths():
+                    if len(path.vertices) > 0:
+                        segments.append(path.vertices)
+
+        return segments
 
     def _draw_oriented_plane(self, X, Y, Z, alpha, is_highlighted):
         """Draw a semi-transparent oriented slice plane."""
@@ -787,6 +833,7 @@ class SliceExplorer(QWidget):
         self.slice_slider.setMinimum(0)
         self.slice_slider.setMaximum(14)
         self.slice_slider.setValue(7)
+        self.slice_slider.setMinimumWidth(100)
         self.slice_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         self.slice_slider.setTickInterval(1)
         self.slice_slider.valueChanged.connect(self._on_slice_changed)
@@ -794,6 +841,7 @@ class SliceExplorer(QWidget):
 
         self.slice_label = QLabel("8/15")
         self.slice_label.setMinimumWidth(45)
+        self.slice_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         slider_row.addWidget(self.slice_label)
         slider_group.addLayout(slider_row)
         controls.addLayout(slider_group, stretch=1)
@@ -844,12 +892,14 @@ class SliceExplorer(QWidget):
         self.contour_scale_slider.setMinimum(25)  # 0.25x
         self.contour_scale_slider.setMaximum(200)  # 2.0x
         self.contour_scale_slider.setValue(100)  # 1.0x (default)
+        self.contour_scale_slider.setMinimumWidth(80)
         self.contour_scale_slider.setToolTip("Adjust contour spacing: left=tighter, right=looser")
         self.contour_scale_slider.valueChanged.connect(self._on_contour_scale_changed)
         contour_row.addWidget(self.contour_scale_slider)
 
         self.contour_scale_label = QLabel("1.0x")
         self.contour_scale_label.setMinimumWidth(35)
+        self.contour_scale_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         contour_row.addWidget(self.contour_scale_label)
         contour_scale_group.addLayout(contour_row)
         controls.addLayout(contour_scale_group)
