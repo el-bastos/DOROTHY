@@ -205,9 +205,9 @@ def download_xtb(progress_callback: Optional[Callable[[int, int], None]] = None)
         return False
 
 
-def write_xyz_file(structure: MoleculeStructure, filepath: Path):
+def write_xyz_file(structure: MoleculeStructure, filepath: Path, align_to_principal_axes: bool = True):
     """Write structure to XYZ format for xTB input."""
-    coords = structure.get_cartesian_coords()
+    coords = structure.get_cartesian_coords(align_to_principal_axes=align_to_principal_axes)
     symbols = structure.get_symbols()
 
     with open(filepath, 'w') as f:

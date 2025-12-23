@@ -6,7 +6,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 
 ## Current Status
 
-**Version:** 0.1.0 (Development)
+**Version:** 0.2.0 (Development)
 
 ### What's Working
 
@@ -17,11 +17,13 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 - **Generation Pipeline** - Promolecule density calculation, contour slicing, PDF export
 - **Principal Axes Alignment** - Molecules auto-rotated for optimal slicing orientation
 - **xTB Integration** - Deformation density via xTB (Homebrew/conda), with install dialog
+- **Detail Level Settings** - Simple mode (beginners) vs Advanced mode (shows π-bonds)
+- **Fixed Contour Levels** - Advanced mode uses consistent levels across slices for comparability
 - **i18n Ready** - Qt translation system in place (English only for now)
 
 ### What's Not Yet Complete
 
-- Slice preview in completion screen
+- 3D slice preview (interactive explorer)
 - Settings persistence
 - App packaging (PyInstaller/cx_Freeze)
 
@@ -89,6 +91,13 @@ Dorothy/
 
 This pairing teaches both structure determination and chemical bonding concepts.
 
+### Detail Levels
+
+| Mode | Contour Levels | Best For |
+|------|----------------|----------|
+| **Simple** | Auto-scaled per slice | Beginners, cleaner output |
+| **Advanced** | Fixed levels (0.01, 0.02, 0.04...) | Shows σ and π bonds |
+
 ### Contour Styling
 
 | Density Type | Positive | Negative |
@@ -119,18 +128,65 @@ The app auto-discovers these on startup.
 ## Next Steps
 
 ### High Priority
-1. Improve contour level selection for cleaner output
+1. **3D Interactive Slice Explorer** - Virtual preview of stacked slices
 
 ### Medium Priority
 2. Add more bundled example molecules
-3. Slice preview in completion screen
-4. Settings persistence (QSettings)
-5. ZIP export option
+3. Settings persistence (QSettings)
+4. ZIP export option
 
 ### Future
-6. App packaging for distribution (macOS .dmg, Windows .exe, Linux AppImage)
-7. Additional languages (Portuguese, Spanish)
-8. Unit tests
+5. App packaging for distribution (macOS .dmg, Windows .exe, Linux AppImage)
+6. Additional languages (Portuguese, Spanish)
+7. Unit tests
+
+---
+
+## TODO: 3D Interactive Slice Explorer
+
+Implementation plan for a virtual 3D preview of the density slices:
+
+### Approach
+Use matplotlib's 3D plotting with interactive controls:
+
+1. **Create `dorothy/ui/slice_explorer.py`**:
+   - PyQt6 widget embedding matplotlib 3D figure
+   - Render each slice as semi-transparent contour plane at correct z-position
+   - Add slider to highlight/navigate individual slices
+   - Mouse rotation for 3D view
+
+2. **Key components**:
+   ```python
+   from mpl_toolkits.mplot3d import Axes3D
+   from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+
+   class SliceExplorer(QWidget):
+       def __init__(self, density_cube: DensityCube):
+           # Create 3D matplotlib figure
+           # Add contour planes for each slice
+           # Add slider for slice selection
+           # Highlighted slice shown opaque, others transparent
+   ```
+
+3. **Integration**:
+   - Add "Preview 3D" button to preview screen (before generation)
+   - Or add to completion screen (after generation)
+   - Pass DensityCube to explorer widget
+
+4. **Rendering strategy**:
+   - Use `ax.contour3D()` or plot filled contours on planes
+   - Each slice at z = slice_index * spacing
+   - Alpha transparency: 0.1 for background slices, 1.0 for selected
+   - Colormap: same as PDF output (BW or color mode)
+
+5. **Interactive controls**:
+   - Slider: move through z-slices
+   - Mouse drag: rotate 3D view
+   - Scroll: zoom
+   - Toggle: show/hide individual density types
+
+### Dependencies
+No new dependencies needed - matplotlib 3D is included.
 
 ---
 
@@ -142,6 +198,10 @@ The app auto-discovers these on startup.
 - Handles organic molecules well
 - Fast (seconds for small molecules)
 - Auto-downloaded, not bundled (clean licensing)
+
+### Deformation Density Calculation
+
+The deformation density uses coordinates directly from the xTB cube file output to ensure perfect alignment between molecular and promolecule densities. The molecule is aligned to principal axes before xTB calculation so that z-slices cut parallel to the molecular plane (optimal for planar molecules like aromatics).
 
 ### Grid Resolution
 

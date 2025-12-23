@@ -195,15 +195,18 @@ def calculate_deformation_density(
 
     Args:
         molecular_density: Density cube from xTB
-        structure: Molecule structure
+        structure: Molecule structure (used only for element symbols)
 
     Returns:
         Deformation density cube
     """
-    # Note: For deformation density, we use the xTB grid which has its own
-    # coordinate system. The structure coords should match the xTB input.
-    coords = structure.get_cartesian_coords(align_to_principal_axes=False)
-    symbols = structure.get_symbols()
+    # Use atom coordinates from the cube file - these match exactly what xTB used
+    # The cube file stores atoms as (Z, x, y, z) in Bohr
+    z_to_symbol = {1: 'H', 6: 'C', 7: 'N', 8: 'O', 9: 'F', 15: 'P', 16: 'S', 17: 'Cl', 35: 'Br', 53: 'I'}
+    symbols = [z_to_symbol.get(atom[0], 'C') for atom in molecular_density.atoms]
+    # Convert from Bohr to Angstrom
+    coords = np.array([[atom[1], atom[2], atom[3]] for atom in molecular_density.atoms]) * 0.529177
+
     promolecule = calculate_promolecule_density(
         coords,
         symbols,

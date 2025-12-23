@@ -38,6 +38,7 @@ class GenerationSettings:
     generate_promolecule: bool = True
     generate_deformation: bool = True
     color_mode: str = "bw"  # bw, color
+    detail_level: str = "simple"  # simple, advanced
 
 
 @dataclass
@@ -146,6 +147,7 @@ class GenerationPipeline:
             contour_settings = ContourSettings(
                 n_slices=settings.n_slices,
                 color_mode=settings.color_mode,
+                detail_level=settings.detail_level,
             )
 
             # Promolecule contours

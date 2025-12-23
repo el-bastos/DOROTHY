@@ -21,6 +21,9 @@ class ContourSettings:
     color_mode: str = "bw"  # "bw" or "color"
     n_contour_levels: int = 10
     page_size: tuple[float, float] = (5.83, 8.27)  # A5 in inches
+    detail_level: str = "simple"  # "simple" or "advanced"
+    # simple: fewer contours, auto-scaled per slice (easier for students)
+    # advanced: fixed contour levels across all slices, shows π-bonds
 
 
 def generate_promolecule_contours(
@@ -47,10 +50,20 @@ def generate_promolecule_contours(
     slices = density.get_z_slices(settings.n_slices)
     pdf_paths = []
 
-    # Determine contour levels (same for all slices for consistency)
-    all_data = np.concatenate([s[1].flatten() for s in slices])
-    vmin, vmax = np.percentile(all_data[all_data > 0], [5, 95])
-    levels = np.linspace(vmin, vmax, settings.n_contour_levels)
+    # Determine contour levels based on detail level
+    if settings.detail_level == "advanced":
+        # Fixed levels across all slices - capped to show bonding regions
+        # These levels work well for normalized densities
+        levels = [0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2, 0.25]
+    else:
+        # Simple mode: auto-scaled based on data percentiles
+        all_data = np.concatenate([s[1].flatten() for s in slices])
+        positive_data = all_data[all_data > 0]
+        if len(positive_data) > 0:
+            vmin, vmax = np.percentile(positive_data, [5, 95])
+            levels = np.linspace(vmin, vmax, settings.n_contour_levels)
+        else:
+            levels = np.linspace(0.01, 1.0, settings.n_contour_levels)
 
     for i, (z_coord, slice_data) in enumerate(slices):
         if progress_callback:
@@ -62,10 +75,14 @@ def generate_promolecule_contours(
         fig.patch.set_facecolor('white')
 
         # Create contour plot
-        if settings.color_mode == "bw":
-            ax.contour(slice_data.T, levels=levels, colors='black', linewidths=0.5)
-        else:
-            ax.contour(slice_data.T, levels=levels, cmap='Blues', linewidths=0.5)
+        try:
+            if settings.color_mode == "bw":
+                ax.contour(slice_data.T, levels=levels, colors='black', linewidths=0.5)
+            else:
+                ax.contour(slice_data.T, levels=levels, cmap='Blues', linewidths=0.5)
+        except ValueError:
+            # No contours at these levels for this slice
+            pass
 
         # Style
         ax.set_aspect('equal')
@@ -116,13 +133,19 @@ def generate_deformation_contours(
     slices = density.get_z_slices(settings.n_slices)
     pdf_paths = []
 
-    # Determine contour levels (symmetric around zero)
-    all_data = np.concatenate([s[1].flatten() for s in slices])
-    max_abs = np.percentile(np.abs(all_data), 95)
-
-    n_levels = settings.n_contour_levels // 2
-    positive_levels = np.linspace(max_abs * 0.1, max_abs, n_levels)
-    negative_levels = -positive_levels[::-1]
+    # Determine contour levels based on detail level
+    if settings.detail_level == "advanced":
+        # Fixed levels - these show both σ and π bonding features
+        # Lower thresholds capture diffuse π-density above/below molecular plane
+        positive_levels = [0.01, 0.02, 0.04, 0.08, 0.12]
+        negative_levels = [-0.12, -0.08, -0.04, -0.02, -0.01]
+    else:
+        # Simple mode: auto-scaled based on data, fewer levels
+        all_data = np.concatenate([s[1].flatten() for s in slices])
+        max_abs = np.percentile(np.abs(all_data), 95)
+        n_levels = settings.n_contour_levels // 2
+        positive_levels = np.linspace(max_abs * 0.1, max_abs, n_levels).tolist()
+        negative_levels = (-np.array(positive_levels[::-1])).tolist()
 
     for i, (z_coord, slice_data) in enumerate(slices):
         if progress_callback:
@@ -134,20 +157,24 @@ def generate_deformation_contours(
         fig.patch.set_facecolor('white')
 
         # Create contour plots
-        if settings.color_mode == "bw":
-            # Positive: solid black
-            ax.contour(slice_data.T, levels=positive_levels,
-                      colors='black', linewidths=0.5, linestyles='solid')
-            # Negative: dashed black
-            ax.contour(slice_data.T, levels=negative_levels,
-                      colors='black', linewidths=0.5, linestyles='dashed')
-        else:
-            # Positive: blue
-            ax.contour(slice_data.T, levels=positive_levels,
-                      colors='blue', linewidths=0.5, linestyles='solid')
-            # Negative: red
-            ax.contour(slice_data.T, levels=negative_levels,
-                      colors='red', linewidths=0.5, linestyles='dashed')
+        try:
+            if settings.color_mode == "bw":
+                # Positive: solid black
+                ax.contour(slice_data.T, levels=positive_levels,
+                          colors='black', linewidths=0.5, linestyles='solid')
+                # Negative: dashed black
+                ax.contour(slice_data.T, levels=negative_levels,
+                          colors='black', linewidths=0.5, linestyles='dashed')
+            else:
+                # Positive: blue
+                ax.contour(slice_data.T, levels=positive_levels,
+                          colors='blue', linewidths=0.5, linestyles='solid')
+                # Negative: red
+                ax.contour(slice_data.T, levels=negative_levels,
+                          colors='red', linewidths=0.5, linestyles='dashed')
+        except ValueError:
+            # No contours at these levels for this slice
+            pass
 
         # Style
         ax.set_aspect('equal')

@@ -484,6 +484,22 @@ class MainWindow(QMainWindow):
         color_layout.addWidget(self.color_combo)
         settings_panel.addWidget(color_group)
 
+        # Detail level
+        detail_group = QGroupBox(self.tr("Detail Level"))
+        detail_layout = QVBoxLayout(detail_group)
+        self.detail_combo = QComboBox()
+        self.detail_combo.addItems([
+            self.tr("Simple (for beginners)"),
+            self.tr("Advanced (shows π-bonds)"),
+        ])
+        self.detail_combo.setCurrentIndex(0)
+        detail_layout.addWidget(self.detail_combo)
+        detail_hint = QLabel(self.tr("Advanced mode uses fixed contour levels\nto reveal subtle bonding features."))
+        detail_hint.setStyleSheet("color: #888; font-size: 9pt;")
+        detail_hint.setWordWrap(True)
+        detail_layout.addWidget(detail_hint)
+        settings_panel.addWidget(detail_group)
+
         settings_panel.addStretch()
 
         # Generate button
@@ -763,6 +779,7 @@ class MainWindow(QMainWindow):
         # Get settings
         resolution_idx = self.resolution_combo.currentIndex()
         resolution = ["coarse", "medium", "fine"][resolution_idx]
+        detail_level = "simple" if self.detail_combo.currentIndex() == 0 else "advanced"
 
         settings = GenerationSettings(
             resolution=resolution,
@@ -770,6 +787,7 @@ class MainWindow(QMainWindow):
             generate_promolecule=self.promolecule_check.isChecked(),
             generate_deformation=self.deformation_check.isChecked(),
             color_mode="bw" if self.color_combo.currentIndex() == 0 else "color",
+            detail_level=detail_level,
         )
 
         # Show processing screen
