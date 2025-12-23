@@ -6,7 +6,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 
 ## Current Status
 
-**Version:** 0.3.2 (Development)
+**Version:** 0.3.3 (Development)
 
 ### What's Working
 
@@ -192,6 +192,12 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 ---
 
 ## Changelog
+
+### v0.3.3 (December 2024)
+- Fixed coordinate system alignment for custom plane selection
+- Contours now properly align with 3D display when using 4-atom plane definition
+- Unified right-handed coordinate convention (u × v = normal) across all modules
+- Improved basis vector handling in density sampling and visualization
 
 ### v0.3.2 (December 2024)
 - Fixed contour rendering for custom plane selection (matplotlib 3.8+ compatibility)

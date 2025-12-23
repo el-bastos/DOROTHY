@@ -253,16 +253,30 @@ class SliceExplorerCanvas(FigureCanvas):
                 self._draw_slice_plane(X, Y, z_coord, slice_data, alpha, is_highlighted)
 
     def _draw_oriented_slices(self, slices, basis_info, levels_pos, levels_neg):
-        """Draw slices along custom plane orientation."""
-        normal = basis_info['normal']
-        u = basis_info['u']
-        v = basis_info['v']
-        center = basis_info['center']
+        """Draw slices along custom plane orientation.
+
+        The coordinate reconstruction must exactly match what density.py used
+        for sampling to ensure contours align properly with the 3D display.
+
+        Grid point at [i,j] corresponds to:
+            position = center + offset*normal + u_range[i]*u + v_range[j]*v
+
+        where u_range and v_range go from -half_extent to +half_extent.
+        """
+        normal = np.asarray(basis_info['normal'])
+        u = np.asarray(basis_info['u'])
+        v = np.asarray(basis_info['v'])
+        center = np.asarray(basis_info['center'])
         half_extent = basis_info['half_extent']
 
+        # Use the actual slice shape to reconstruct the grid
+        # This ensures we use the same n_points that density.py used
         slice_shape = slices[0][1].shape
-        u_range = np.linspace(-half_extent, half_extent, slice_shape[0])
-        v_range = np.linspace(-half_extent, half_extent, slice_shape[1])
+        n_u, n_v = slice_shape
+
+        # Reconstruct the exact same grid that density.py used
+        u_range = np.linspace(-half_extent, half_extent, n_u)
+        v_range = np.linspace(-half_extent, half_extent, n_v)
         U, V = np.meshgrid(u_range, v_range, indexing='ij')
 
         for i, (offset, slice_data) in enumerate(slices):
@@ -270,6 +284,7 @@ class SliceExplorerCanvas(FigureCanvas):
             alpha = 0.9 if is_highlighted else 0.15
 
             # Calculate 3D position of each point in the slice
+            # This formula matches exactly what density.py uses
             slice_center = center + normal * offset
             X = slice_center[0] + U * u[0] + V * v[0]
             Y = slice_center[1] + U * u[1] + V * v[1]
@@ -285,16 +300,25 @@ class SliceExplorerCanvas(FigureCanvas):
                 self._draw_oriented_plane(X, Y, Z, alpha, is_highlighted)
 
     def _draw_oriented_contours(self, X, Y, Z, slice_data, levels_pos, levels_neg, alpha, is_highlighted):
-        """Draw contour lines on an oriented slice."""
+        """Draw contour lines on an oriented slice.
+
+        The slice_data array is indexed as [i, j] where:
+        - i corresponds to the u direction (rows in our grid)
+        - j corresponds to the v direction (cols in our grid)
+
+        matplotlib's contour treats 2D arrays as [row, col], so row=i (u) and col=j (v).
+        It returns contour coordinates as (x, y) = (col, row) = (j, i).
+        """
         # Draw the plane first
         self._draw_oriented_plane(X, Y, Z, alpha * 0.3, is_highlighted)
 
-        ni, nj = slice_data.shape
+        n_u, n_v = slice_data.shape
 
         # Draw positive contours
         if len(levels_pos) > 0 and slice_data.max() > min(levels_pos):
             try:
-                # Get contour lines in 2D, then map to 3D
+                # Get contour lines in 2D using pixel coordinates
+                # matplotlib treats data[row, col] with row=i, col=j
                 fig_temp = plt.figure()
                 ax_temp = fig_temp.add_subplot(111)
                 cs = ax_temp.contour(slice_data, levels=levels_pos)
@@ -305,7 +329,7 @@ class SliceExplorerCanvas(FigureCanvas):
 
                 for seg in segments:
                     if len(seg) > 1:
-                        # Use bilinear interpolation for smooth 3D coordinates
+                        # Map 2D contour coordinates to 3D positions
                         xs, ys, zs = self._interpolate_contour_to_3d(seg, X, Y, Z)
                         if len(xs) > 1:
                             self.ax.plot(xs, ys, zs,
@@ -340,32 +364,47 @@ class SliceExplorerCanvas(FigureCanvas):
     def _interpolate_contour_to_3d(self, seg, X, Y, Z):
         """Interpolate 2D contour coordinates to 3D using bilinear interpolation.
 
+        matplotlib's contour() on a 2D array returns coordinates in pixel space:
+        - For an array with shape (n_rows, n_cols), contour returns (x, y) where:
+          - x is the column index (0 to n_cols-1)
+          - y is the row index (0 to n_rows-1)
+
+        Our grids X, Y, Z have shape (n_u, n_v) where:
+        - First axis (rows) = u direction
+        - Second axis (cols) = v direction
+
+        So matplotlib returns (col, row) = (v_index, u_index) = (j, i)
+
         Args:
-            seg: Array of (x, y) = (col, row) = (j, i) fractional coordinates from matplotlib contour
-            X, Y, Z: 3D coordinate grids for the slice, indexed as [i, j]
+            seg: Array of (x, y) = (col, row) = (j, i) coordinates from matplotlib contour
+            X, Y, Z: 3D coordinate grids for the slice, indexed as [i, j] = [u, v]
 
         Returns:
             xs, ys, zs: Lists of interpolated 3D coordinates
         """
-        ni, nj = X.shape
+        n_u, n_v = X.shape
         xs = []
         ys = []
         zs = []
 
-        for cj, ci in seg:  # matplotlib returns (x, y) = (col, row) = (j, i)
+        for col, row in seg:  # matplotlib returns (col, row) = (j, i) = (v_idx, u_idx)
+            # Map to our indexing: i = row (u index), j = col (v index)
+            u_idx = row  # row in matplotlib = i = u direction
+            v_idx = col  # col in matplotlib = j = v direction
+
             # Clamp to valid range (leaving room for interpolation)
-            ci = np.clip(ci, 0, ni - 1.001)
-            cj = np.clip(cj, 0, nj - 1.001)
+            u_idx = np.clip(u_idx, 0, n_u - 1.001)
+            v_idx = np.clip(v_idx, 0, n_v - 1.001)
 
             # Get integer indices and fractional parts
-            i0 = int(ci)
-            j0 = int(cj)
-            i1 = min(i0 + 1, ni - 1)
-            j1 = min(j0 + 1, nj - 1)
+            i0 = int(u_idx)
+            j0 = int(v_idx)
+            i1 = min(i0 + 1, n_u - 1)
+            j1 = min(j0 + 1, n_v - 1)
 
             # Fractional parts for interpolation
-            fi = ci - i0
-            fj = cj - j0
+            fi = u_idx - i0
+            fj = v_idx - j0
 
             # Bilinear interpolation for each coordinate
             def bilinear(arr):

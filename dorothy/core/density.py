@@ -89,6 +89,13 @@ class DensityCube:
         perpendicular to the given plane normal, using the provided
         u/v axes for orientation and center for positioning.
 
+        The coordinate system is:
+        - normal: direction of slice progression (perpendicular to slice planes)
+        - u: "right" direction in the slice plane (first axis of 2D grid)
+        - v: "up" direction in the slice plane (second axis of 2D grid)
+
+        These form a right-handed coordinate system: u × v = normal
+
         Args:
             n_slices: Number of slices to extract
             plane_definition: Either a PlaneDefinition object (from SelectionManager)
@@ -98,21 +105,25 @@ class DensityCube:
             Tuple of:
             - List of (offset, 2D_array) tuples where offset is the distance
               along the normal from the plane center
-            - Dict with 'normal', 'u', 'v' basis vectors, 'center', and 'extent'
+            - Dict with 'normal', 'u', 'v' basis vectors, 'center', 'half_extent', and 'n_points'
         """
         from scipy.interpolate import RegularGridInterpolator
 
         # Handle both PlaneDefinition objects and raw normal vectors
         if hasattr(plane_definition, 'normal'):
-            # PlaneDefinition object
-            normal = plane_definition.normal / np.linalg.norm(plane_definition.normal)
-            u = plane_definition.u_axis
-            v = plane_definition.v_axis
-            user_center = plane_definition.center
+            # PlaneDefinition object - use provided basis vectors directly
+            normal = np.asarray(plane_definition.normal, dtype=float)
+            normal = normal / np.linalg.norm(normal)
+            u = np.asarray(plane_definition.u_axis, dtype=float)
+            u = u / np.linalg.norm(u)
+            v = np.asarray(plane_definition.v_axis, dtype=float)
+            v = v / np.linalg.norm(v)
+            user_center = np.asarray(plane_definition.center, dtype=float)
             use_user_center = True
         else:
             # Raw normal vector (backward compatibility)
-            normal = plane_definition / np.linalg.norm(plane_definition)
+            normal = np.asarray(plane_definition, dtype=float)
+            normal = normal / np.linalg.norm(normal)
             u = None
             v = None
             user_center = None
@@ -141,7 +152,7 @@ class DensityCube:
 
         # Determine center point
         if use_user_center:
-            center_3d = user_center
+            center_3d = user_center.copy()
         elif self.atoms:
             atom_coords = np.array([(a[1], a[2], a[3]) for a in self.atoms]) * bohr_to_ang
             center_3d = atom_coords.mean(axis=0)
@@ -171,6 +182,7 @@ class DensityCube:
             max_proj = projections.max()
 
         # Create orthonormal basis for the slice plane if not provided
+        # Use consistent convention: u × v = normal (right-handed)
         if u is None or v is None:
             # Find a vector not parallel to normal
             if abs(normal[2]) < 0.9:
@@ -178,9 +190,11 @@ class DensityCube:
             else:
                 ref = np.array([1.0, 0.0, 0.0])
 
-            u = np.cross(normal, ref)
+            # Create right-handed basis: u × v = normal
+            v = np.cross(normal, ref)
+            v = v / np.linalg.norm(v)
+            u = np.cross(v, normal)
             u = u / np.linalg.norm(u)
-            v = np.cross(normal, u)
 
         # Determine slice sampling resolution
         grid_spacing = min(
@@ -195,20 +209,20 @@ class DensityCube:
         )
         n_points = int(extent / grid_spacing) + 1
         n_points = min(n_points, 200)  # Cap for performance
+        half_extent = extent / 2
 
         # Generate slice offsets (relative to center)
         offsets = np.linspace(min_proj, max_proj, n_slices)
 
         slices = []
         for offset in offsets:
-            # Create sampling points for this slice
-            half_extent = extent / 2
+            # Create sampling grid for this slice
             u_range = np.linspace(-half_extent, half_extent, n_points)
             v_range = np.linspace(-half_extent, half_extent, n_points)
             U, V = np.meshgrid(u_range, v_range, indexing='ij')
 
             # Calculate 3D coordinates for each sample point
-            # Center point is at center_3d + offset along normal
+            # Point at grid[i,j] = center + offset*normal + u_range[i]*u + v_range[j]*v
             slice_center = center_3d + normal * offset
             X = slice_center[0] + U * u[0] + V * v[0]
             Y = slice_center[1] + U * u[1] + V * v[1]
@@ -221,13 +235,15 @@ class DensityCube:
             slices.append((offset, slice_data))
 
         # Return basis info for positioning slices in 3D
+        # Include n_points to ensure slice_explorer uses the same grid
         basis_info = {
             'normal': normal,
             'u': u,
             'v': v,
             'center': center_3d,
             'extent': extent,
-            'half_extent': extent / 2,
+            'half_extent': half_extent,
+            'n_points': n_points,
         }
 
         return slices, basis_info

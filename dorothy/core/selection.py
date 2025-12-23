@@ -157,6 +157,10 @@ class SelectionManager(QObject):
         - Atoms 1-3: Define the plane via cross product
         - Atom 4: Defines the "up" direction (v_axis points toward atom 4)
         - Center: Centroid of all 4 atoms
+
+        The resulting coordinate system is right-handed: u × v = normal
+        This ensures consistency with how density.py samples and
+        slice_explorer.py displays the slices.
         """
         if self._coords is None or not self._selection.is_complete:
             return None
@@ -182,8 +186,8 @@ class SelectionManager(QObject):
         # Center is centroid of all 4 atoms
         center = (p1 + p2 + p3 + p4) / 4.0
 
-        # Atom 4 defines the "up" direction
-        # Project p4 onto the plane and use direction from center to projection as v_axis
+        # Atom 4 defines the "up" direction (v_axis)
+        # Project p4 onto the plane and use direction from center to projection
         p4_rel = p4 - center
         p4_in_plane = p4_rel - np.dot(p4_rel, normal) * normal
 
@@ -198,7 +202,8 @@ class SelectionManager(QObject):
         else:
             v_axis = p4_in_plane / np.linalg.norm(p4_in_plane)
 
-        # u_axis is perpendicular to both normal and v_axis (right-hand rule)
+        # u_axis completes the right-handed system: u × v = normal
+        # This means u = v × normal (not normal × v)
         u_axis = np.cross(v_axis, normal)
         u_axis = u_axis / np.linalg.norm(u_axis)
 
