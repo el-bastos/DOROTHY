@@ -34,7 +34,9 @@ from dorothy.core.cod_search import CODSearch, MoleculeResult
 from dorothy.core.cif_parser import MoleculeStructure
 from dorothy.core.generator import GenerationPipeline, GenerationSettings, GenerationResult
 from dorothy.core.xtb_manager import is_xtb_installed, download_xtb, get_download_url, get_xtb_install_instructions
+from dorothy.core.density import create_density_cube_from_structure
 from dorothy.ui.molecule_viewer import MoleculeViewer
+from dorothy.ui.slice_explorer import SliceExplorer
 
 
 class SearchWorker(QThread):
@@ -421,11 +423,67 @@ class MainWindow(QMainWindow):
         # Main content: viewer + settings side by side
         content = QHBoxLayout()
 
-        # Left: Molecule viewer
+        # Left: Molecule viewer with view toggle
         viewer_container = QVBoxLayout()
+
+        # View toggle buttons
+        view_toggle = QHBoxLayout()
+        self.view_2d_btn = QPushButton(self.tr("2D Structure"))
+        self.view_2d_btn.setCheckable(True)
+        self.view_2d_btn.setChecked(True)
+        self.view_2d_btn.clicked.connect(lambda: self._switch_view("2d"))
+        self.view_2d_btn.setStyleSheet("""
+            QPushButton {
+                padding: 8px 16px;
+                border: 1px solid #ccc;
+                border-radius: 4px 0 0 4px;
+                background: #2563eb;
+                color: white;
+                font-weight: bold;
+            }
+            QPushButton:!checked {
+                background: #f0f0f0;
+                color: #333;
+            }
+        """)
+        view_toggle.addWidget(self.view_2d_btn)
+
+        self.view_3d_btn = QPushButton(self.tr("3D Slices"))
+        self.view_3d_btn.setCheckable(True)
+        self.view_3d_btn.clicked.connect(lambda: self._switch_view("3d"))
+        self.view_3d_btn.setStyleSheet("""
+            QPushButton {
+                padding: 8px 16px;
+                border: 1px solid #ccc;
+                border-left: none;
+                border-radius: 0 4px 4px 0;
+                background: #f0f0f0;
+                color: #333;
+            }
+            QPushButton:checked {
+                background: #2563eb;
+                color: white;
+                font-weight: bold;
+            }
+        """)
+        view_toggle.addWidget(self.view_3d_btn)
+        view_toggle.addStretch()
+        viewer_container.addLayout(view_toggle)
+
+        # Stacked widget for 2D/3D views
+        self.viewer_stack = QStackedWidget()
+
+        # 2D Molecule viewer
         self.molecule_viewer = MoleculeViewer()
         self.molecule_viewer.setMinimumSize(350, 350)
-        viewer_container.addWidget(self.molecule_viewer)
+        self.viewer_stack.addWidget(self.molecule_viewer)
+
+        # 3D Slice explorer
+        self.slice_explorer = SliceExplorer()
+        self.slice_explorer.setMinimumSize(350, 350)
+        self.viewer_stack.addWidget(self.slice_explorer)
+
+        viewer_container.addWidget(self.viewer_stack)
 
         # Molecule info below viewer
         self.mol_info_label = QLabel()
@@ -740,6 +798,12 @@ class MainWindow(QMainWindow):
         else:
             self.molecule_viewer.clear()
 
+        # Clear 3D preview (will be regenerated when switching to 3D view)
+        self.slice_explorer.clear()
+
+        # Reset to 2D view
+        self._switch_view("2d")
+
         # Show preview screen
         self.stacked_widget.setCurrentWidget(self.preview_screen)
 
@@ -850,6 +914,40 @@ class MainWindow(QMainWindow):
     def _go_to_results(self):
         """Return to results screen."""
         self.stacked_widget.setCurrentWidget(self.results_screen)
+
+    def _switch_view(self, view: str):
+        """Switch between 2D and 3D views."""
+        if view == "2d":
+            self.view_2d_btn.setChecked(True)
+            self.view_3d_btn.setChecked(False)
+            self.viewer_stack.setCurrentWidget(self.molecule_viewer)
+        else:
+            self.view_2d_btn.setChecked(False)
+            self.view_3d_btn.setChecked(True)
+            self.viewer_stack.setCurrentWidget(self.slice_explorer)
+
+            # Generate density cube for 3D preview if not already done
+            if self.selected_structure and self.slice_explorer._promolecule_cube is None:
+                self._update_3d_preview()
+
+    def _update_3d_preview(self):
+        """Generate density cube for 3D preview."""
+        if not self.selected_structure:
+            return
+
+        # Use coarse resolution for quick preview
+        cube = create_density_cube_from_structure(
+            self.selected_structure,
+            resolution="coarse",
+            align_to_principal_axes=True
+        )
+
+        n_slices = self.slice_spinbox.value()
+        self.slice_explorer.set_density_cubes(
+            promolecule=cube,
+            deformation=None,  # Deformation requires xTB, not available in preview
+            n_slices=n_slices
+        )
 
     def tr(self, text: str) -> str:
         """Translate text using Qt's translation system."""

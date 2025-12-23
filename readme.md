@@ -14,6 +14,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 - **Molecule Search** - Local CIF files + COD online (with fallback)
 - **CIF Parser** - Extracts atomic coordinates, cell parameters, space groups
 - **2D Molecule Viewer** - Bond detection, CPK coloring
+- **3D Slice Explorer** - Interactive 3D preview of density slices before printing
 - **Generation Pipeline** - Promolecule density calculation, contour slicing, PDF export
 - **Principal Axes Alignment** - Molecules auto-rotated for optimal slicing orientation
 - **xTB Integration** - Deformation density via xTB (Homebrew/conda), with install dialog
@@ -23,7 +24,6 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 
 ### What's Not Yet Complete
 
-- 3D slice preview (interactive explorer)
 - Settings persistence
 - App packaging (PyInstaller/cx_Freeze)
 
@@ -72,7 +72,8 @@ Dorothy/
 │   │   └── xtb_manager.py      # xTB download and execution
 │   ├── ui/
 │   │   ├── main_window.py      # Main application window
-│   │   └── molecule_viewer.py  # 2D structure viewer
+│   │   ├── molecule_viewer.py  # 2D structure viewer
+│   │   └── slice_explorer.py   # 3D interactive slice preview
 │   └── resources/
 │       └── translations/       # i18n files
 ├── examples/
@@ -127,66 +128,15 @@ The app auto-discovers these on startup.
 
 ## Next Steps
 
-### High Priority
-1. **3D Interactive Slice Explorer** - Virtual preview of stacked slices
-
 ### Medium Priority
-2. Add more bundled example molecules
-3. Settings persistence (QSettings)
-4. ZIP export option
+1. Add more bundled example molecules
+2. Settings persistence (QSettings)
+3. ZIP export option
 
 ### Future
-5. App packaging for distribution (macOS .dmg, Windows .exe, Linux AppImage)
-6. Additional languages (Portuguese, Spanish)
-7. Unit tests
-
----
-
-## TODO: 3D Interactive Slice Explorer
-
-Implementation plan for a virtual 3D preview of the density slices:
-
-### Approach
-Use matplotlib's 3D plotting with interactive controls:
-
-1. **Create `dorothy/ui/slice_explorer.py`**:
-   - PyQt6 widget embedding matplotlib 3D figure
-   - Render each slice as semi-transparent contour plane at correct z-position
-   - Add slider to highlight/navigate individual slices
-   - Mouse rotation for 3D view
-
-2. **Key components**:
-   ```python
-   from mpl_toolkits.mplot3d import Axes3D
-   from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
-
-   class SliceExplorer(QWidget):
-       def __init__(self, density_cube: DensityCube):
-           # Create 3D matplotlib figure
-           # Add contour planes for each slice
-           # Add slider for slice selection
-           # Highlighted slice shown opaque, others transparent
-   ```
-
-3. **Integration**:
-   - Add "Preview 3D" button to preview screen (before generation)
-   - Or add to completion screen (after generation)
-   - Pass DensityCube to explorer widget
-
-4. **Rendering strategy**:
-   - Use `ax.contour3D()` or plot filled contours on planes
-   - Each slice at z = slice_index * spacing
-   - Alpha transparency: 0.1 for background slices, 1.0 for selected
-   - Colormap: same as PDF output (BW or color mode)
-
-5. **Interactive controls**:
-   - Slider: move through z-slices
-   - Mouse drag: rotate 3D view
-   - Scroll: zoom
-   - Toggle: show/hide individual density types
-
-### Dependencies
-No new dependencies needed - matplotlib 3D is included.
+4. App packaging for distribution (macOS .dmg, Windows .exe, Linux AppImage)
+5. Additional languages (Portuguese, Spanish)
+6. Unit tests
 
 ---
 
@@ -236,3 +186,14 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 ---
 
 *December 2024*
+
+---
+
+## Changelog
+
+### v0.2.1 (December 2024)
+- Added 3D Interactive Slice Explorer with contour visualization
+- Toggle between 2D structure and 3D slice preview
+- Slice navigation slider with highlighted current slice
+- Mouse rotation/zoom for 3D view
+- B&W and color mode support
