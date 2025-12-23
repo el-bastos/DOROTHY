@@ -149,6 +149,21 @@ def parse_cif_value(value: str) -> float:
         return 0.0
 
 
+def parse_cif_string(content: str, name: str = "", source: str = "") -> MoleculeStructure:
+    """
+    Parse CIF content from a string.
+
+    Args:
+        content: CIF file content as string
+        name: Optional name for the structure
+        source: Optional source identifier (e.g., COD ID)
+
+    Returns:
+        MoleculeStructure with all extracted data
+    """
+    return _parse_cif_content(content, name, source)
+
+
 def parse_cif(filepath: str | Path) -> MoleculeStructure:
     """
     Parse a CIF file and extract molecular structure.
@@ -161,20 +176,35 @@ def parse_cif(filepath: str | Path) -> MoleculeStructure:
     """
     filepath = Path(filepath)
     content = filepath.read_text()
+    return _parse_cif_content(content, "", str(filepath))
 
+
+def _parse_cif_content(content: str, name: str = "", source: str = "") -> MoleculeStructure:
+    """
+    Internal function to parse CIF content.
+
+    Args:
+        content: CIF file content as string
+        name: Optional name override
+        source: Source file path or identifier
+
+    Returns:
+        MoleculeStructure with all extracted data
+    """
     # Initialize structure
     structure = MoleculeStructure(
-        name="",
+        name=name,
         formula="",
         cell=CellParameters(1, 1, 1, 90, 90, 90),
         space_group="",
-        source_file=str(filepath)
+        source_file=source
     )
 
-    # Extract simple fields
-    name_match = re.search(r'_chemical_name_common\s+(.+)', content)
-    if name_match:
-        structure.name = name_match.group(1).strip().strip("'\"")
+    # Extract name from CIF only if not provided
+    if not structure.name:
+        name_match = re.search(r'_chemical_name_common\s+(.+)', content)
+        if name_match:
+            structure.name = name_match.group(1).strip().strip("'\"")
 
     if not structure.name:
         name_match = re.search(r'_chemical_name_systematic\s*\n;\s*\n(.+?)\n', content)
@@ -185,7 +215,10 @@ def parse_cif(filepath: str | Path) -> MoleculeStructure:
     if formula_match:
         structure.formula = formula_match.group(1)
 
-    sg_match = re.search(r'_symmetry_space_group_name_H-M\s+(\S+)', content)
+    # Space group can be quoted (e.g., 'P 1 21/c 1') or unquoted
+    sg_match = re.search(r"_symmetry_space_group_name_H-M\s+'([^']+)'", content)
+    if not sg_match:
+        sg_match = re.search(r'_symmetry_space_group_name_H-M\s+(\S+)', content)
     if sg_match:
         structure.space_group = sg_match.group(1)
 

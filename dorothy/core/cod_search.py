@@ -121,6 +121,23 @@ class CODSearch:
                 matches.append(mol)
         return matches
 
+    def _estimate_atom_count(self, formula: str) -> int:
+        """
+        Estimate atom count from chemical formula.
+
+        Parses formulas like "C9 H8 O4" to sum atom counts.
+        """
+        import re
+        total = 0
+        # Match element symbol followed by optional number
+        # e.g., "C9" -> C with 9, "H" -> H with 1
+        for match in re.finditer(r'([A-Z][a-z]?)\s*(\d*)', formula):
+            element = match.group(1)
+            count_str = match.group(2)
+            count = int(count_str) if count_str else 1
+            total += count
+        return total
+
     def _search_cod(self, query: str) -> list[MoleculeResult]:
         """Search COD database online."""
         # COD API requires POST with text1 parameter
@@ -148,19 +165,17 @@ class CODSearch:
             # Get name: prefer commonname, fall back to chemname
             name = entry.get("commonname") or entry.get("chemname") or "Unknown"
 
-            # nel is number of element types, not atom count
-            # We'll use Z (molecules per unit cell) as a rough indicator
-            atom_info = entry.get("nel", 0)
-            try:
-                atom_info = int(atom_info) if atom_info else 0
-            except (ValueError, TypeError):
-                atom_info = 0
+            # COD doesn't provide atom count directly
+            # nel = number of element types, Z = molecules per unit cell
+            # We estimate from formula if possible, otherwise use 0
+            formula = entry.get("formula", "").strip("- ")
+            atom_count = self._estimate_atom_count(formula)
 
             results.append(MoleculeResult(
                 cod_id=str(entry.get("file", "")),
                 name=name,
-                formula=entry.get("formula", "").strip("- "),
-                atom_count=atom_info,
+                formula=formula,
+                atom_count=atom_count,
                 space_group=entry.get("sg", ""),
                 is_local=False,
             ))
@@ -180,13 +195,16 @@ class CODSearch:
                 if mol.source_file == result.cif_path:
                     return mol
         else:
-            # Download from COD
+            # Download from COD and parse
             cif_content = self.download_cif(result.cod_id)
             if cif_content:
-                from dorothy.core.cif_parser import parse_cif
-                # Would need to save to temp file or parse from string
-                # For now, return None for COD results
-                pass
+                from dorothy.core.cif_parser import parse_cif_string
+                structure = parse_cif_string(
+                    cif_content,
+                    name=result.name,
+                    source=f"COD:{result.cod_id}"
+                )
+                return structure
         return None
 
     def get_cif_url(self, cod_id: str) -> str:
