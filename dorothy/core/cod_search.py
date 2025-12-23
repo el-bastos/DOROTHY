@@ -4,7 +4,12 @@ COD (Crystallography Open Database) search module.
 Provides search functionality with fallback to local examples when COD is unavailable.
 """
 
+import warnings
 import requests
+
+# Suppress SSL warnings for COD (their certificate has hostname mismatch)
+from urllib3.exceptions import InsecureRequestWarning
+warnings.filterwarnings('ignore', category=InsecureRequestWarning)
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -70,8 +75,9 @@ class CODSearch:
         """Check if COD is reachable."""
         try:
             response = requests.head(
-                f"{self.BASE_URL}/search.php",
-                timeout=5
+                f"{self.BASE_URL}/search.html",
+                timeout=5,
+                verify=False,  # COD has SSL certificate mismatch
             )
             self._online = response.status_code == 200
         except (requests.RequestException, requests.Timeout):
@@ -117,27 +123,44 @@ class CODSearch:
 
     def _search_cod(self, query: str) -> list[MoleculeResult]:
         """Search COD database online."""
-        params = {
-            "text": query,
+        # COD API requires POST with text1 parameter
+        data = {
+            "text1": query,
             "format": "json",
         }
 
-        response = requests.get(
+        response = requests.post(
             f"{self.BASE_URL}/result.php",
-            params=params,
-            timeout=self.TIMEOUT
+            data=data,
+            timeout=self.TIMEOUT,
+            verify=False,  # COD has SSL certificate mismatch
         )
         response.raise_for_status()
 
+        # COD returns a JSON array directly, not an object with "results" key
         data = response.json()
         results = []
 
-        for entry in data.get("results", [])[:20]:  # Limit to 20 results
+        # Handle both array (current API) and object with "results" key (legacy)
+        entries = data if isinstance(data, list) else data.get("results", [])
+
+        for entry in entries[:20]:  # Limit to 20 results
+            # Get name: prefer commonname, fall back to chemname
+            name = entry.get("commonname") or entry.get("chemname") or "Unknown"
+
+            # nel is number of element types, not atom count
+            # We'll use Z (molecules per unit cell) as a rough indicator
+            atom_info = entry.get("nel", 0)
+            try:
+                atom_info = int(atom_info) if atom_info else 0
+            except (ValueError, TypeError):
+                atom_info = 0
+
             results.append(MoleculeResult(
                 cod_id=str(entry.get("file", "")),
-                name=entry.get("commonname", entry.get("chemname", "Unknown")),
-                formula=entry.get("formula", ""),
-                atom_count=entry.get("nel", 0),
+                name=name,
+                formula=entry.get("formula", "").strip("- "),
+                atom_count=atom_info,
                 space_group=entry.get("sg", ""),
                 is_local=False,
             ))
@@ -174,7 +197,11 @@ class CODSearch:
         """Download CIF file content from COD."""
         try:
             url = self.get_cif_url(cod_id)
-            response = requests.get(url, timeout=self.TIMEOUT)
+            response = requests.get(
+                url,
+                timeout=self.TIMEOUT,
+                verify=False,  # COD has SSL certificate mismatch
+            )
             response.raise_for_status()
             return response.text
         except (requests.RequestException, requests.Timeout):

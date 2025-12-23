@@ -199,6 +199,7 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 - **Fixed 3D view distortion**: Added equal aspect ratio to prevent molecule stretching
 - **Fixed custom plane coordinate mismatch**: Plane rotation now uses consistent coordinate system
 - Custom plane selection properly aligns selected atoms to XY plane
+- **Fixed COD search**: Updated API to use POST with text1 parameter, handle SSL certificate mismatch
 
 ### v0.3.4 (December 2024)
 - **Architecture fix**: Custom plane selection now rotates the molecule before density calculation
