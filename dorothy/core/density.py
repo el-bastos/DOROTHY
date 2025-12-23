@@ -279,7 +279,9 @@ def create_density_cube_from_structure(
     """
     if plane_definition is not None:
         # Use custom plane rotation: rotate so plane normal -> Z axis
-        coords = structure.get_cartesian_coords(align_to_principal_axes=False)
+        # IMPORTANT: The plane_definition was calculated from principal-axes-aligned
+        # coordinates, so we must start from those same aligned coordinates
+        coords = structure.get_cartesian_coords(align_to_principal_axes=True)
         center = plane_definition.center
         rotation = plane_definition.rotation_matrix
         # Center on plane center, then rotate

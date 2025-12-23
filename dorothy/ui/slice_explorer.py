@@ -88,6 +88,9 @@ class SliceExplorerCanvas(FigureCanvas):
         self.ax.set_ylabel('Y (Å)', fontsize=9)
         self.ax.set_zlabel('Z (Å)', fontsize=9)
 
+        # Equal aspect ratio to prevent stretching
+        self.ax.set_box_aspect([1, 1, 1])
+
         self.fig.tight_layout()
 
     def set_density_cube(self, cube: DensityCube, density_type: str = "promolecule"):
@@ -530,6 +533,16 @@ class SliceExplorerCanvas(FigureCanvas):
         self.ax.set_xlim(cx - half_x, cx + half_x)
         self.ax.set_ylim(cy - half_y, cy + half_y)
         self.ax.set_zlim(cz - half_z, cz + half_z)
+
+        # Maintain equal aspect ratio based on data ranges
+        x_range = 2 * half_x
+        y_range = 2 * half_y
+        z_range = 2 * half_z
+        max_range = max(x_range, y_range, z_range)
+        if max_range > 0:
+            self.ax.set_box_aspect([x_range / max_range,
+                                    y_range / max_range,
+                                    z_range / max_range])
 
         self.draw()
 

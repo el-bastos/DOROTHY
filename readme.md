@@ -6,7 +6,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 
 ## Current Status
 
-**Version:** 0.3.4 (Development)
+**Version:** 0.3.5 (Development)
 
 ### What's Working
 
@@ -194,6 +194,11 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 ---
 
 ## Changelog
+
+### v0.3.5 (December 2024)
+- **Fixed 3D view distortion**: Added equal aspect ratio to prevent molecule stretching
+- **Fixed custom plane coordinate mismatch**: Plane rotation now uses consistent coordinate system
+- Custom plane selection properly aligns selected atoms to XY plane
 
 ### v0.3.4 (December 2024)
 - **Architecture fix**: Custom plane selection now rotates the molecule before density calculation
