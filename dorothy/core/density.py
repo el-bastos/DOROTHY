@@ -164,12 +164,14 @@ class DensityCube:
             ])
 
         # Calculate extent along normal for slice distribution
+        # Use atom positions to distribute slices across the molecule
         if self.atoms:
             atom_coords = np.array([(a[1], a[2], a[3]) for a in self.atoms]) * bohr_to_ang
             projections = (atom_coords - center_3d) @ normal
             min_proj = projections.min() - 1.0  # Add padding
             max_proj = projections.max() + 1.0
         else:
+            # Fallback to cube corners if no atoms
             corners = np.array([
                 [x_coords[0], y_coords[0], z_coords[0]],
                 [x_coords[-1], y_coords[0], z_coords[0]],
@@ -202,14 +204,29 @@ class DensityCube:
             abs(axes_ang[1, 1]),
             abs(axes_ang[2, 2])
         )
-        extent = max(
-            x_coords[-1] - x_coords[0],
-            y_coords[-1] - y_coords[0],
-            z_coords[-1] - z_coords[0]
-        )
-        n_points = int(extent / grid_spacing) + 1
+
+        # Calculate slice extent based on atom positions projected onto the slice plane
+        # This ensures slices are sized to fit the molecule, like Z-slices
+        if self.atoms:
+            atom_coords = np.array([(a[1], a[2], a[3]) for a in self.atoms]) * bohr_to_ang
+            # Project atoms onto u and v axes relative to center
+            u_projections = (atom_coords - center_3d) @ u
+            v_projections = (atom_coords - center_3d) @ v
+            # Extent is max spread in either direction plus padding
+            u_extent = max(abs(u_projections.min()), abs(u_projections.max())) + 2.0
+            v_extent = max(abs(v_projections.min()), abs(v_projections.max())) + 2.0
+            half_extent = max(u_extent, v_extent)
+        else:
+            # Fallback to cube dimensions
+            extent = max(
+                x_coords[-1] - x_coords[0],
+                y_coords[-1] - y_coords[0],
+                z_coords[-1] - z_coords[0]
+            )
+            half_extent = extent / 2
+
+        n_points = int(2 * half_extent / grid_spacing) + 1
         n_points = min(n_points, 200)  # Cap for performance
-        half_extent = extent / 2
 
         # Generate slice offsets (relative to center)
         offsets = np.linspace(min_proj, max_proj, n_slices)
@@ -241,7 +258,6 @@ class DensityCube:
             'u': u,
             'v': v,
             'center': center_3d,
-            'extent': extent,
             'half_extent': half_extent,
             'n_points': n_points,
         }

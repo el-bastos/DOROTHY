@@ -198,6 +198,7 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 - Contours now properly align with 3D display when using 4-atom plane definition
 - Unified right-handed coordinate convention (u × v = normal) across all modules
 - Improved basis vector handling in density sampling and visualization
+- Fixed slice extent to fit molecule bounds instead of full cube dimensions
 
 ### v0.3.2 (December 2024)
 - Fixed contour rendering for custom plane selection (matplotlib 3.8+ compatibility)
