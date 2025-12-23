@@ -13,7 +13,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 - **PyQt6 Desktop Application** - Native UI with 5 screens
 - **Molecule Search** - Local CIF files + COD online (with fallback)
 - **CIF Parser** - Extracts atomic coordinates, cell parameters, space groups
-- **2D Molecule Viewer** - Bond detection, CPK coloring, interactive atom selection
+- **2D Molecule Viewer** - Bond detection, CPK coloring, interactive atom selection, 3D rotation
 - **3D Slice Explorer** - Interactive 3D preview with zoom, bonds, and custom orientation
 - **Interactive Plane Selection** - Click 4 atoms to define custom slicing plane (3 for plane + 1 for orientation)
 - **Auto xTB on 3D View** - Automatically calculates deformation density when switching to 3D
@@ -196,6 +196,8 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 ## Changelog
 
 ### v0.3.6 (December 2024)
+- **2D Molecule Rotation**: Drag mouse or use arrow buttons to rotate molecule in 2D view
+- Depth-based rendering gives pseudo-3D effect (size/alpha varies with depth)
 - **Fixed COD CIF parsing**: Parser now correctly stops at loop boundaries, preventing atom data from being mixed with anisotropic displacement parameters and geometry data
 - COD-downloaded molecules now display with correct coordinates and bond lengths
 
