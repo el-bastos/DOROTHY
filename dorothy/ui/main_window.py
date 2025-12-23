@@ -89,9 +89,10 @@ class XtbDensityWorker(QThread):
     progress = pyqtSignal(str)  # status message
     finished = pyqtSignal(object, object)  # promolecule_cube, deformation_cube
 
-    def __init__(self, structure: MoleculeStructure):
+    def __init__(self, structure: MoleculeStructure, plane_definition=None):
         super().__init__()
         self.structure = structure
+        self.plane_definition = plane_definition
 
     def run(self):
         from dorothy.core.xtb_manager import is_xtb_installed, run_xtb_density
@@ -107,11 +108,13 @@ class XtbDensityWorker(QThread):
 
         try:
             # Always create promolecule (fast)
+            # Use plane rotation if provided, otherwise use principal axes
             self.progress.emit("Generating promolecule density...")
             promolecule = create_density_cube_from_structure(
                 self.structure,
                 resolution="coarse",
-                align_to_principal_axes=True
+                align_to_principal_axes=(self.plane_definition is None),
+                plane_definition=self.plane_definition
             )
 
             # Try xTB if available
@@ -121,7 +124,8 @@ class XtbDensityWorker(QThread):
                     cube_path = run_xtb_density(
                         self.structure,
                         Path(tmp_dir),
-                        lambda msg: self.progress.emit(msg)
+                        lambda msg: self.progress.emit(msg),
+                        plane_definition=self.plane_definition
                     )
 
                     if cube_path:
@@ -941,9 +945,23 @@ class MainWindow(QMainWindow):
             )
 
     def _on_plane_defined(self, plane_definition):
-        """Handle plane definition from 4 selected atoms."""
-        # plane_definition is now a PlaneDefinition object with normal, u_axis, v_axis, center
-        self.slice_explorer.canvas.set_custom_plane(plane_definition)
+        """Handle plane definition from 4 selected atoms.
+
+        When a new plane is defined, we need to recalculate the density cube
+        with the molecule rotated so the selected plane is horizontal.
+        This ensures Z-slices cut parallel to the user-selected plane.
+        """
+        # Store the plane definition
+        self._current_plane_definition = plane_definition
+
+        # Clear cached densities to force recalculation
+        self.slice_explorer._promolecule_cube = None
+        self.slice_explorer._deformation_cube = None
+        self.slice_explorer.canvas._density_cube = None
+
+        # Trigger recalculation with the new plane orientation
+        if self.selected_structure:
+            self._start_3d_density_calculation()
 
     def _clear_atom_selection(self):
         """Clear current atom selection."""
@@ -951,9 +969,18 @@ class MainWindow(QMainWindow):
             self.selection_manager.clear()
 
     def _reset_slice_plane(self):
-        """Reset to default Z-axis slicing."""
+        """Reset to default principal-axes slicing."""
         self._clear_atom_selection()
-        self.slice_explorer.canvas.set_custom_plane(None)
+        self._current_plane_definition = None
+
+        # Clear cached densities to force recalculation with default orientation
+        self.slice_explorer._promolecule_cube = None
+        self.slice_explorer._deformation_cube = None
+        self.slice_explorer.canvas._density_cube = None
+
+        # Trigger recalculation with default (principal axes) orientation
+        if self.selected_structure:
+            self._start_3d_density_calculation()
 
     def _on_generate(self):
         """Handle generate PDFs button click."""
@@ -1086,8 +1113,14 @@ class MainWindow(QMainWindow):
         # Show progress indicator
         self.mol_info_label.setText("Calculating density...")
 
-        # Start background calculation
-        self.xtb_density_worker = XtbDensityWorker(self.selected_structure)
+        # Get current plane definition if any
+        plane_def = getattr(self, '_current_plane_definition', None)
+
+        # Start background calculation with plane rotation
+        self.xtb_density_worker = XtbDensityWorker(
+            self.selected_structure,
+            plane_definition=plane_def
+        )
         self.xtb_density_worker.progress.connect(self._on_xtb_density_progress)
         self.xtb_density_worker.finished.connect(self._on_xtb_density_complete)
         self.xtb_density_worker.start()

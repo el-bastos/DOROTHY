@@ -6,17 +6,14 @@ Supports atom picking for plane definition, zoom controls, and bond visualizatio
 """
 
 import numpy as np
-import matplotlib.pyplot as plt
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSlider, QLabel,
-    QPushButton, QComboBox, QCheckBox, QSizePolicy, QGroupBox
+    QPushButton, QComboBox, QCheckBox, QSizePolicy
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-import matplotlib.colors as mcolors
 
 from dorothy.core.density import DensityCube
 
@@ -51,9 +48,6 @@ class SliceExplorerCanvas(FigureCanvas):
         self._selected_indices: list[int] = []
         self._pick_enabled = False
         self._atom_positions_3d: list[tuple[float, float, float]] = []
-
-        # Custom plane for slicing (PlaneDefinition or np.ndarray normal or None)
-        self._custom_plane_definition = None
 
         # Zoom state
         self._zoom_level = 1.0
@@ -129,7 +123,12 @@ class SliceExplorerCanvas(FigureCanvas):
             self._draw_slices()
 
     def _draw_slices(self):
-        """Draw all slices in 3D."""
+        """Draw all slices in 3D.
+
+        Always uses Z-slices through the density cube. The molecule rotation
+        (for custom plane selection) is handled upstream when the density cube
+        is calculated, not here.
+        """
         self._setup_3d_axes()
 
         if not self._density_cube:
@@ -139,17 +138,16 @@ class SliceExplorerCanvas(FigureCanvas):
             self.draw()
             return
 
-        # Get slices - use custom plane if defined
-        basis_info = None
-        if self._custom_plane_definition is not None:
-            slices, basis_info = self._density_cube.get_oriented_slices(
-                self._n_slices,
-                self._custom_plane_definition
-            )
-            use_custom_plane = True
-        else:
-            slices = self._density_cube.get_z_slices(self._n_slices)
-            use_custom_plane = False
+        # Always use Z-slices - molecule rotation is handled in density calculation
+        slices = self._density_cube.get_z_slices(self._n_slices)
+
+        # Handle empty slices
+        if not slices:
+            self.ax.text2D(0.5, 0.5, 'No slices available',
+                          ha='center', va='center', transform=self.ax.transAxes,
+                          fontsize=12, color='#888')
+            self.draw()
+            return
 
         # Get grid extent in Angstrom
         origin = self._density_cube.origin * 0.529177
@@ -177,7 +175,6 @@ class SliceExplorerCanvas(FigureCanvas):
         else:
             # Promolecule density
             max_val = all_data.max()
-            min_val = max(0.001, all_data[all_data > 0].min()) if np.any(all_data > 0) else 0.001
             if max_val > 0.001:
                 # Generate contours from min to max, scaled
                 # More contours when scale < 1, fewer when scale > 1
@@ -193,20 +190,10 @@ class SliceExplorerCanvas(FigureCanvas):
                 levels_pos = []
             levels_neg = []
 
-        # Debug: print levels
-        # print(f"Density type: {self._density_type}, max: {all_data.max():.4f}, levels_pos: {levels_pos[:3] if levels_pos else 'none'}")
+        # Draw slices
+        self._draw_z_slices(slices, origin, x_extent, y_extent, levels_pos, levels_neg)
 
-        # Draw each slice - both modes now use the same horizontal display format
-        if use_custom_plane and basis_info:
-            # Use basis_info for extents if available
-            bi_origin = basis_info.get('origin', origin)
-            bi_x_extent = basis_info.get('x_extent', x_extent)
-            bi_y_extent = basis_info.get('y_extent', y_extent)
-            self._draw_z_slices(slices, bi_origin, bi_x_extent, bi_y_extent, levels_pos, levels_neg)
-        else:
-            self._draw_z_slices(slices, origin, x_extent, y_extent, levels_pos, levels_neg)
-
-        # Calculate display limits from the actual slice data
+        # Calculate display limits
         x = np.linspace(origin[0], origin[0] + x_extent, slices[0][1].shape[0])
         y = np.linspace(origin[1], origin[1] + y_extent, slices[0][1].shape[1])
         z_coords = [z for z, _ in slices]
@@ -250,216 +237,6 @@ class SliceExplorerCanvas(FigureCanvas):
                 )
             else:
                 self._draw_slice_plane(X, Y, z_coord, slice_data, alpha, is_highlighted)
-
-    def _draw_oriented_slices(self, slices, basis_info, levels_pos, levels_neg):
-        """Draw slices along custom plane orientation.
-
-        The coordinate reconstruction must exactly match what density.py used
-        for sampling to ensure contours align properly with the 3D display.
-
-        Grid point at [i,j] corresponds to:
-            position = center + offset*normal + u_range[i]*u + v_range[j]*v
-
-        where u_range and v_range go from -half_extent to +half_extent.
-        """
-        normal = np.asarray(basis_info['normal'])
-        u = np.asarray(basis_info['u'])
-        v = np.asarray(basis_info['v'])
-        center = np.asarray(basis_info['center'])
-        half_extent = basis_info['half_extent']
-
-        # Use the actual slice shape to reconstruct the grid
-        # This ensures we use the same n_points that density.py used
-        slice_shape = slices[0][1].shape
-        n_u, n_v = slice_shape
-
-        # Reconstruct the exact same grid that density.py used
-        u_range = np.linspace(-half_extent, half_extent, n_u)
-        v_range = np.linspace(-half_extent, half_extent, n_v)
-        U, V = np.meshgrid(u_range, v_range, indexing='ij')
-
-        for i, (offset, slice_data) in enumerate(slices):
-            is_highlighted = (i == self._highlighted_slice)
-            alpha = 0.9 if is_highlighted else 0.15
-
-            # Calculate 3D position of each point in the slice
-            # This formula matches exactly what density.py uses
-            slice_center = center + normal * offset
-            X = slice_center[0] + U * u[0] + V * v[0]
-            Y = slice_center[1] + U * u[1] + V * v[1]
-            Z = slice_center[2] + U * u[2] + V * v[2]
-
-            if self._show_contours and len(levels_pos) > 0:
-                self._draw_oriented_contours(
-                    X, Y, Z, slice_data,
-                    levels_pos, levels_neg,
-                    alpha, is_highlighted
-                )
-            else:
-                self._draw_oriented_plane(X, Y, Z, alpha, is_highlighted)
-
-    def _draw_oriented_contours(self, X, Y, Z, slice_data, levels_pos, levels_neg, alpha, is_highlighted):
-        """Draw contour lines on an oriented slice.
-
-        The slice_data array is indexed as [i, j] where:
-        - i corresponds to the u direction (rows in our grid)
-        - j corresponds to the v direction (cols in our grid)
-
-        matplotlib's contour treats 2D arrays as [row, col], so row=i (u) and col=j (v).
-        It returns contour coordinates as (x, y) = (col, row) = (j, i).
-        """
-        # Draw the plane first
-        self._draw_oriented_plane(X, Y, Z, alpha * 0.3, is_highlighted)
-
-        n_u, n_v = slice_data.shape
-
-        # Draw positive contours
-        if len(levels_pos) > 0 and slice_data.max() > min(levels_pos):
-            try:
-                # Get contour lines in 2D using pixel coordinates
-                # matplotlib treats data[row, col] with row=i, col=j
-                fig_temp = plt.figure()
-                ax_temp = fig_temp.add_subplot(111)
-                cs = ax_temp.contour(slice_data, levels=levels_pos)
-                plt.close(fig_temp)
-
-                # Extract contour segments (compatible with matplotlib 3.8+)
-                segments = self._extract_contour_segments(cs)
-
-                for seg in segments:
-                    if len(seg) > 1:
-                        # Map 2D contour coordinates to 3D positions
-                        xs, ys, zs = self._interpolate_contour_to_3d(seg, X, Y, Z)
-                        if len(xs) > 1:
-                            self.ax.plot(xs, ys, zs,
-                                       color='#000000' if self._color_mode == 'bw' else '#2563eb',
-                                       linewidth=2.0 if is_highlighted else 0.6,
-                                       alpha=1.0 if is_highlighted else 0.4)
-            except Exception as e:
-                print(f"Error drawing positive contours: {e}")
-
-        # Draw negative contours
-        if len(levels_neg) > 0 and slice_data.min() < max(levels_neg):
-            try:
-                fig_temp = plt.figure()
-                ax_temp = fig_temp.add_subplot(111)
-                cs = ax_temp.contour(slice_data, levels=levels_neg)
-                plt.close(fig_temp)
-
-                segments = self._extract_contour_segments(cs)
-
-                for seg in segments:
-                    if len(seg) > 1:
-                        xs, ys, zs = self._interpolate_contour_to_3d(seg, X, Y, Z)
-                        if len(xs) > 1:
-                            self.ax.plot(xs, ys, zs,
-                                       color='#666666' if self._color_mode == 'bw' else '#dc2626',
-                                       linestyle='--',
-                                       linewidth=2.0 if is_highlighted else 0.6,
-                                       alpha=1.0 if is_highlighted else 0.4)
-            except Exception as e:
-                print(f"Error drawing negative contours: {e}")
-
-    def _interpolate_contour_to_3d(self, seg, X, Y, Z):
-        """Interpolate 2D contour coordinates to 3D using bilinear interpolation.
-
-        matplotlib's contour() on a 2D array returns coordinates in pixel space:
-        - For an array with shape (n_rows, n_cols), contour returns (x, y) where:
-          - x is the column index (0 to n_cols-1)
-          - y is the row index (0 to n_rows-1)
-
-        Our grids X, Y, Z have shape (n_u, n_v) where:
-        - First axis (rows) = u direction
-        - Second axis (cols) = v direction
-
-        So matplotlib returns (col, row) = (v_index, u_index) = (j, i)
-
-        Args:
-            seg: Array of (x, y) = (col, row) = (j, i) coordinates from matplotlib contour
-            X, Y, Z: 3D coordinate grids for the slice, indexed as [i, j] = [u, v]
-
-        Returns:
-            xs, ys, zs: Lists of interpolated 3D coordinates
-        """
-        n_u, n_v = X.shape
-        xs = []
-        ys = []
-        zs = []
-
-        for col, row in seg:  # matplotlib returns (col, row) = (j, i) = (v_idx, u_idx)
-            # Map to our indexing: i = row (u index), j = col (v index)
-            u_idx = row  # row in matplotlib = i = u direction
-            v_idx = col  # col in matplotlib = j = v direction
-
-            # Clamp to valid range (leaving room for interpolation)
-            u_idx = np.clip(u_idx, 0, n_u - 1.001)
-            v_idx = np.clip(v_idx, 0, n_v - 1.001)
-
-            # Get integer indices and fractional parts
-            i0 = int(u_idx)
-            j0 = int(v_idx)
-            i1 = min(i0 + 1, n_u - 1)
-            j1 = min(j0 + 1, n_v - 1)
-
-            # Fractional parts for interpolation
-            fi = u_idx - i0
-            fj = v_idx - j0
-
-            # Bilinear interpolation for each coordinate
-            def bilinear(arr):
-                return (arr[i0, j0] * (1 - fi) * (1 - fj) +
-                        arr[i1, j0] * fi * (1 - fj) +
-                        arr[i0, j1] * (1 - fi) * fj +
-                        arr[i1, j1] * fi * fj)
-
-            xs.append(bilinear(X))
-            ys.append(bilinear(Y))
-            zs.append(bilinear(Z))
-
-        return xs, ys, zs
-
-    def _extract_contour_segments(self, contour_set) -> list:
-        """Extract contour line segments from a ContourSet.
-
-        Compatible with both old (matplotlib < 3.8) and new (3.8+) APIs.
-        """
-        segments = []
-
-        # New API (matplotlib 3.8+): use allsegs
-        if hasattr(contour_set, 'allsegs'):
-            for level_segs in contour_set.allsegs:
-                for seg in level_segs:
-                    if len(seg) > 0:
-                        segments.append(seg)
-        # Old API: use collections
-        elif hasattr(contour_set, 'collections'):
-            for collection in contour_set.collections:
-                for path in collection.get_paths():
-                    if len(path.vertices) > 0:
-                        segments.append(path.vertices)
-
-        return segments
-
-    def _draw_oriented_plane(self, X, Y, Z, alpha, is_highlighted):
-        """Draw a semi-transparent oriented slice plane."""
-        # Get corners of the slice
-        corners = [
-            [X[0, 0], Y[0, 0], Z[0, 0]],
-            [X[-1, 0], Y[-1, 0], Z[-1, 0]],
-            [X[-1, -1], Y[-1, -1], Z[-1, -1]],
-            [X[0, -1], Y[0, -1], Z[0, -1]],
-        ]
-
-        if is_highlighted:
-            color = '#2563eb' if self._color_mode == 'color' else '#666666'
-            face_alpha = 0.3
-        else:
-            color = '#cccccc'
-            face_alpha = 0.1
-
-        poly = Poly3DCollection([corners], alpha=face_alpha * alpha,
-                                facecolor=color, edgecolor='#999999', linewidth=0.5)
-        self.ax.add_collection3d(poly)
 
     def _draw_slice_contours(self, X, Y, Z, slice_data, z_coord,
                              levels_pos, levels_neg, alpha, is_highlighted):
@@ -510,9 +287,6 @@ class SliceExplorerCanvas(FigureCanvas):
         # Get bounds
         x_min, x_max = X.min(), X.max()
         y_min, y_max = Y.min(), Y.max()
-
-        # Draw a simple colored rectangle for the slice plane
-        from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
         # Define the corners of the rectangle
         verts = [
@@ -701,12 +475,19 @@ class SliceExplorerCanvas(FigureCanvas):
             )
 
         # Show density range info
+        # Density is in e/Bohr³, convert to e/Å³ for display
         data = self._density_cube.data
+        bohr_to_ang = 0.529177
+        # Convert density from e/Bohr³ to e/Å³ (multiply by Bohr³/Å³)
+        density_ang = data * (1.0 / bohr_to_ang**3)
+        # Calculate volume element for total electron count
+        dV = abs(np.linalg.det(self._density_cube.axes))  # Volume in Bohr³
+        total_electrons = data.sum() * dV
         info = (
             f"Density range:\n"
-            f"  min: {data.min():.4f} e/Å³\n"
-            f"  max: {data.max():.4f} e/Å³\n"
-            f"  sum: {data.sum() * 0.529177**3:.1f} e"
+            f"  min: {density_ang.min():.4f} e/Å³\n"
+            f"  max: {density_ang.max():.4f} e/Å³\n"
+            f"  total: {total_electrons:.1f} e"
         )
         self._density_text.set_text(info)
         self._density_text.set_visible(True)
@@ -806,15 +587,14 @@ class SliceExplorerCanvas(FigureCanvas):
         self._pick_enabled = enabled
 
     def set_custom_plane(self, plane_definition):
-        """Set custom slicing plane and redraw.
+        """Legacy method - custom plane is now handled by recalculating the density cube.
 
-        Args:
-            plane_definition: Either a PlaneDefinition object (with normal, u_axis, v_axis, center)
-                            or a np.ndarray normal vector, or None to reset
+        This method is kept for API compatibility but does nothing.
+        The plane rotation is applied when the density cube is calculated,
+        so slicing always uses simple Z-slices.
         """
-        self._custom_plane_definition = plane_definition
-        if self._density_cube:
-            self._draw_slices()
+        # No-op: plane rotation is handled upstream in density calculation
+        pass
 
     def set_show_bonds(self, show: bool):
         """Enable or disable bond visualization."""

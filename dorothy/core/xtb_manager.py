@@ -12,9 +12,14 @@ import requests
 import tarfile
 import zipfile
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional, Callable, TYPE_CHECKING
+
+import numpy as np
 
 from dorothy.core.cif_parser import MoleculeStructure
+
+if TYPE_CHECKING:
+    from dorothy.core.selection import PlaneDefinition
 
 
 # xTB release info
@@ -205,9 +210,33 @@ def download_xtb(progress_callback: Optional[Callable[[int, int], None]] = None)
         return False
 
 
-def write_xyz_file(structure: MoleculeStructure, filepath: Path, align_to_principal_axes: bool = True):
-    """Write structure to XYZ format for xTB input."""
-    coords = structure.get_cartesian_coords(align_to_principal_axes=align_to_principal_axes)
+def write_xyz_file(
+    structure: MoleculeStructure,
+    filepath: Path,
+    align_to_principal_axes: bool = True,
+    plane_definition: Optional["PlaneDefinition"] = None
+):
+    """Write structure to XYZ format for xTB input.
+
+    Args:
+        structure: Molecule structure
+        filepath: Path to write XYZ file
+        align_to_principal_axes: If True and no plane_definition, align to principal axes
+        plane_definition: If provided, rotate coordinates so the user-selected plane
+                         becomes horizontal (XY plane). This takes precedence over
+                         align_to_principal_axes.
+    """
+    if plane_definition is not None:
+        # Use custom plane rotation: rotate so plane normal -> Z axis
+        coords = structure.get_cartesian_coords(align_to_principal_axes=False)
+        center = plane_definition.center
+        rotation = plane_definition.rotation_matrix
+        # Center on plane center, then rotate
+        coords_centered = coords - center
+        coords = coords_centered @ rotation.T
+    else:
+        coords = structure.get_cartesian_coords(align_to_principal_axes=align_to_principal_axes)
+
     symbols = structure.get_symbols()
 
     with open(filepath, 'w') as f:
@@ -220,7 +249,8 @@ def write_xyz_file(structure: MoleculeStructure, filepath: Path, align_to_princi
 def run_xtb_density(
     structure: MoleculeStructure,
     output_dir: Path,
-    progress_callback: Optional[Callable[[str], None]] = None
+    progress_callback: Optional[Callable[[str], None]] = None,
+    plane_definition: Optional["PlaneDefinition"] = None
 ) -> Optional[Path]:
     """
     Run xTB calculation to generate electron density cube file.
@@ -229,6 +259,9 @@ def run_xtb_density(
         structure: Molecule structure
         output_dir: Directory for output files
         progress_callback: Optional callback for status updates
+        plane_definition: If provided, rotate molecule so the user-selected plane
+                         becomes horizontal before calculation. This ensures
+                         Z-slices cut parallel to the user's chosen plane.
 
     Returns:
         Path to density cube file, or None if failed
@@ -240,9 +273,9 @@ def run_xtb_density(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Write input XYZ file
+    # Write input XYZ file (with optional plane rotation)
     xyz_file = output_dir / "molecule.xyz"
-    write_xyz_file(structure, xyz_file)
+    write_xyz_file(structure, xyz_file, plane_definition=plane_definition)
 
     # Write xTB input file to request density cube output
     input_file = output_dir / "xtb.inp"

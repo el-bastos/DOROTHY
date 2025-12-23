@@ -63,11 +63,18 @@ class AtomSelection:
 
 @dataclass
 class PlaneDefinition:
-    """Complete plane definition from 4 atoms."""
+    """Complete plane definition from 4 atoms.
+
+    The rotation_matrix transforms coordinates so that:
+    - The selected plane becomes the XY plane
+    - Z-axis aligns with the plane normal
+    - Slicing along Z will cut parallel to the user-selected plane
+    """
     normal: np.ndarray  # Unit normal to the plane
     u_axis: np.ndarray  # "Right" direction in the slice
     v_axis: np.ndarray  # "Up" direction in the slice
     center: np.ndarray  # Centroid of the 4 selected atoms
+    rotation_matrix: np.ndarray = field(default_factory=lambda: np.eye(3))  # 3x3 rotation matrix
 
 
 class SelectionManager(QObject):
@@ -207,11 +214,20 @@ class SelectionManager(QObject):
         u_axis = np.cross(v_axis, normal)
         u_axis = u_axis / np.linalg.norm(u_axis)
 
+        # Build rotation matrix that transforms coordinates so:
+        # - u_axis -> X axis (1, 0, 0)
+        # - v_axis -> Y axis (0, 1, 0)
+        # - normal -> Z axis (0, 0, 1)
+        # The rotation matrix R has rows = target basis vectors
+        # coords_rotated = (coords - center) @ R.T
+        rotation_matrix = np.array([u_axis, v_axis, normal])
+
         return PlaneDefinition(
             normal=normal,
             u_axis=u_axis,
             v_axis=v_axis,
             center=center,
+            rotation_matrix=rotation_matrix,
         )
 
     def get_plane_definition(self) -> Optional[PlaneDefinition]:

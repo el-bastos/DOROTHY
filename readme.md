@@ -6,7 +6,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 
 ## Current Status
 
-**Version:** 0.3.3 (Development)
+**Version:** 0.3.4 (Development)
 
 ### What's Working
 
@@ -153,7 +153,9 @@ The app auto-discovers these on startup.
 
 ### Deformation Density Calculation
 
-The deformation density uses coordinates directly from the xTB cube file output to ensure perfect alignment between molecular and promolecule densities. The molecule is aligned to principal axes before xTB calculation so that z-slices cut parallel to the molecular plane (optimal for planar molecules like aromatics).
+The deformation density uses coordinates directly from the xTB cube file output to ensure perfect alignment between molecular and promolecule densities. By default, molecules are aligned to principal axes before xTB calculation so that Z-slices cut parallel to the molecular plane.
+
+When using custom plane selection (4 atoms), the molecule is rotated so the user-selected plane becomes horizontal. This triggers a full density recalculation with the rotated coordinates, ensuring contours are computed directly on the selected plane orientation—not interpolated from a tilted slice.
 
 ### Grid Resolution
 
@@ -192,6 +194,14 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 ---
 
 ## Changelog
+
+### v0.3.4 (December 2024)
+- **Architecture fix**: Custom plane selection now rotates the molecule before density calculation
+- Plane selection triggers full xTB recalculation with rotated coordinates
+- Contours are computed directly on the selected plane, not interpolated
+- Removed complex oriented slice interpolation code (~200 lines)
+- Fixed density info display: proper unit conversion (e/Bohr³ → e/Å³)
+- Code cleanup: removed unused imports and dead code
 
 ### v0.3.3 (December 2024)
 - Major fix: Custom plane slices now display as horizontal planes (like auto mode)
