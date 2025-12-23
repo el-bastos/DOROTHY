@@ -6,7 +6,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 
 ## Current Status
 
-**Version:** 0.3.5 (Development)
+**Version:** 0.3.6 (Development)
 
 ### What's Working
 
@@ -194,6 +194,10 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 ---
 
 ## Changelog
+
+### v0.3.6 (December 2024)
+- **Fixed COD CIF parsing**: Parser now correctly stops at loop boundaries, preventing atom data from being mixed with anisotropic displacement parameters and geometry data
+- COD-downloaded molecules now display with correct coordinates and bond lengths
 
 ### v0.3.5 (December 2024)
 - **Fixed 3D view distortion**: Added equal aspect ratio to prevent molecule stretching

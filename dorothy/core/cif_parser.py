@@ -236,8 +236,10 @@ def _parse_cif_content(content: str, name: str = "", source: str = "") -> Molecu
             setattr(structure.cell, attr, parse_cif_value(match.group(1)))
 
     # Parse atom sites (this is the tricky part - CIF loop format)
+    # We need to find the loop_ block with fractional coordinates specifically
+    # and stop before the next loop_ or before lines starting with _
     atom_loop_match = re.search(
-        r'loop_\s*\n((?:_atom_site_\w+\s*\n)+)((?:(?!\nloop_|\n_).+\n?)+)',
+        r'loop_\s*\n((?:_atom_site_(?!aniso)\w+\s*\n)+)',
         content,
         re.MULTILINE
     )
@@ -247,9 +249,27 @@ def _parse_cif_content(content: str, name: str = "", source: str = "") -> Molecu
         headers_text = atom_loop_match.group(1)
         headers = re.findall(r'_atom_site_(\w+)', headers_text)
 
-        # Get data rows
-        data_text = atom_loop_match.group(2)
-        rows = [line.split() for line in data_text.strip().split('\n') if line.strip()]
+        # Check if this loop has fractional coordinates
+        if 'fract_x' not in headers:
+            atom_loop_match = None
+
+    if atom_loop_match:
+        # Find where the data starts (right after headers)
+        data_start = atom_loop_match.end()
+
+        # Extract data rows - stop at next loop_, line starting with _, or empty line followed by _
+        data_lines = []
+        remaining_content = content[data_start:]
+        for line in remaining_content.split('\n'):
+            stripped = line.strip()
+            # Stop conditions: empty line, line starting with _, or loop_
+            if not stripped:
+                continue
+            if stripped.startswith('_') or stripped.startswith('loop_'):
+                break
+            data_lines.append(stripped)
+
+        rows = [line.split() for line in data_lines if line]
 
         # Find column indices
         try:
