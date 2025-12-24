@@ -15,6 +15,8 @@ from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from matplotlib.colors import Normalize
+from matplotlib import cm
 
 from dorothy.core.density import DensityCube
 
@@ -62,18 +64,21 @@ class Slice2DPreviewDialog(QDialog):
 
     def show_slice(self, slice_data: np.ndarray, z_coord: float, density_type: str,
                    color_mode: str, atoms: list = None, contour_scale: float = 1.0,
-                   origin: np.ndarray = None, axes: np.ndarray = None):
-        """Display a 2D contour plot of the slice.
+                   origin: np.ndarray = None, axes: np.ndarray = None,
+                   render_mode: str = "contour", colormap: str = "RdYlBu_r"):
+        """Display a 2D contour plot or heatmap of the slice.
 
         Args:
             slice_data: 2D array of density values
             z_coord: Z-coordinate of the slice in Angstrom
-            density_type: "promolecule" or "deformation"
+            density_type: "promolecule", "deformation", or "elf"
             color_mode: "bw" or "color"
             atoms: List of (Z, x, y, z) in Bohr - atoms near this slice will be shown
             contour_scale: Contour level scale factor
             origin: Grid origin in Bohr
             axes: Grid axes in Bohr
+            render_mode: "contour" or "heatmap"
+            colormap: Matplotlib colormap name for heatmap mode
         """
         self.fig.clear()
         ax = self.fig.add_subplot(111)
@@ -86,47 +91,87 @@ class Slice2DPreviewDialog(QDialog):
             x = np.linspace(origin[0], origin[0] + nx * axes[0, 0], nx) * bohr_to_ang
             y = np.linspace(origin[1], origin[1] + ny * axes[1, 1], ny) * bohr_to_ang
             X, Y = np.meshgrid(x, y, indexing='ij')
+            extent = [x.min(), x.max(), y.min(), y.max()]
         else:
             X, Y = np.meshgrid(np.arange(slice_data.shape[0]),
                                np.arange(slice_data.shape[1]), indexing='ij')
+            extent = None
 
-        # Determine contour levels
-        scale = contour_scale
-        if density_type == "deformation":
-            base_levels = np.array([0.005, 0.01, 0.02, 0.04, 0.08])
-            levels_pos = list(base_levels * scale)
-            levels_neg = list(-base_levels[::-1] * scale)
+        # Heatmap mode - use imshow
+        if render_mode == "heatmap":
+            if density_type == "elf":
+                vmin, vmax = 0.0, 1.0
+                info_text = f"ELF at z = {z_coord:.2f} Å\nRed = localized | Blue = delocalized"
+            elif density_type == "deformation":
+                max_abs = max(abs(slice_data.min()), abs(slice_data.max()))
+                vmin, vmax = -max_abs, max_abs
+                info_text = f"Deformation density at z = {z_coord:.2f} Å\nRed = accumulation | Blue = depletion"
+            else:
+                vmin, vmax = slice_data.min(), slice_data.max()
+                info_text = f"Promolecule density at z = {z_coord:.2f} Å"
 
-            # Draw positive contours
-            valid_pos = [l for l in levels_pos if l < slice_data.max()]
-            if valid_pos:
-                color = 'black' if color_mode == 'bw' else '#2563eb'
-                ax.contour(X, Y, slice_data, levels=valid_pos, colors=color, linewidths=1.0)
-
-            # Draw negative contours
-            valid_neg = [l for l in levels_neg if l > slice_data.min()]
-            if valid_neg:
-                color = '#666666' if color_mode == 'bw' else '#dc2626'
-                ax.contour(X, Y, slice_data, levels=valid_neg, colors=color,
-                          linewidths=1.0, linestyles='dashed')
-
-            self.info_label.setText(
-                f"Deformation density at z = {z_coord:.2f} Å\n"
-                "Solid = electron accumulation (bonds) | Dashed = depletion"
+            # Note: imshow expects data in (rows, cols) = (y, x) format
+            # Our data is (x, y), so we transpose
+            im = ax.imshow(
+                slice_data.T,
+                cmap=colormap,
+                vmin=vmin,
+                vmax=vmax,
+                extent=extent,
+                origin='lower',
+                aspect='equal',
+                interpolation='bilinear'
             )
+            self.fig.colorbar(im, ax=ax, shrink=0.8)
+            self.info_label.setText(info_text)
         else:
-            # Promolecule
-            max_val = slice_data.max()
-            if max_val > 0.001:
-                n_contours = max(3, int(7 / scale))
-                start = max_val * 0.02 * scale
-                end = max_val * 0.8
-                if start < end:
-                    levels = list(np.linspace(start, end, n_contours))
-                    color = 'black' if color_mode == 'bw' else '#2563eb'
-                    ax.contour(X, Y, slice_data, levels=levels, colors=color, linewidths=1.0)
+            # Contour mode (original behavior)
+            scale = contour_scale
+            if density_type == "deformation":
+                base_levels = np.array([0.005, 0.01, 0.02, 0.04, 0.08])
+                levels_pos = list(base_levels * scale)
+                levels_neg = list(-base_levels[::-1] * scale)
 
-            self.info_label.setText(f"Promolecule density at z = {z_coord:.2f} Å")
+                # Draw positive contours
+                valid_pos = [l for l in levels_pos if l < slice_data.max()]
+                if valid_pos:
+                    color = 'black' if color_mode == 'bw' else '#2563eb'
+                    ax.contour(X, Y, slice_data, levels=valid_pos, colors=color, linewidths=1.0)
+
+                # Draw negative contours
+                valid_neg = [l for l in levels_neg if l > slice_data.min()]
+                if valid_neg:
+                    color = '#666666' if color_mode == 'bw' else '#dc2626'
+                    ax.contour(X, Y, slice_data, levels=valid_neg, colors=color,
+                              linewidths=1.0, linestyles='dashed')
+
+                self.info_label.setText(
+                    f"Deformation density at z = {z_coord:.2f} Å\n"
+                    "Solid = electron accumulation (bonds) | Dashed = depletion"
+                )
+            elif density_type == "elf":
+                # ELF contours at fixed levels
+                levels = [0.2, 0.4, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9]
+                color = 'black' if color_mode == 'bw' else '#2563eb'
+                cs = ax.contour(X, Y, slice_data, levels=levels, colors=color, linewidths=1.0)
+                ax.clabel(cs, inline=True, fontsize=8, fmt='%.1f')
+                self.info_label.setText(
+                    f"ELF at z = {z_coord:.2f} Å\n"
+                    "0.5 = electron gas | ~0.85 = covalent bond | ~1.0 = lone pair"
+                )
+            else:
+                # Promolecule
+                max_val = slice_data.max()
+                if max_val > 0.001:
+                    n_contours = max(3, int(7 / scale))
+                    start = max_val * 0.02 * scale
+                    end = max_val * 0.8
+                    if start < end:
+                        levels = list(np.linspace(start, end, n_contours))
+                        color = 'black' if color_mode == 'bw' else '#2563eb'
+                        ax.contour(X, Y, slice_data, levels=levels, colors=color, linewidths=1.0)
+
+                self.info_label.setText(f"Promolecule density at z = {z_coord:.2f} Å")
 
         # Draw atoms near this slice
         if atoms and origin is not None:
@@ -197,6 +242,12 @@ class SliceExplorerCanvas(FigureCanvas):
 
         # Contour level scale (1.0 = default, <1 = tighter/more, >1 = looser/fewer)
         self._contour_scale = 1.0
+
+        # Render mode: "contour" or "heatmap"
+        self._render_mode = "contour"
+
+        # Colormap for heatmap mode
+        self._heatmap_colormap = "RdYlBu_r"  # Red (high) -> Blue (low)
 
         # Bond information storage for click detection
         self._bonds: list[tuple[int, int, float]] = []  # (atom1_idx, atom2_idx, length)
@@ -370,6 +421,22 @@ class SliceExplorerCanvas(FigureCanvas):
         y = np.linspace(origin[1], origin[1] + y_extent, slices[0][1].shape[1])
         X, Y = np.meshgrid(x, y, indexing='ij')
 
+        # Calculate global min/max for consistent heatmap normalization
+        if self._render_mode == "heatmap":
+            all_data = np.concatenate([s.flatten() for _, s in slices])
+            if self._density_type == "deformation" or self._density_type == "elf":
+                # For deformation/ELF, use symmetric normalization around zero
+                # ELF is 0-1, deformation is symmetric around 0
+                if self._density_type == "elf":
+                    vmin, vmax = 0.0, 1.0
+                else:
+                    max_abs = max(abs(all_data.min()), abs(all_data.max()))
+                    vmin, vmax = -max_abs, max_abs
+            else:
+                vmin, vmax = all_data.min(), all_data.max()
+            norm = Normalize(vmin=vmin, vmax=vmax)
+            cmap = cm.get_cmap(self._heatmap_colormap)
+
         for i, (z_coord, slice_data) in enumerate(slices):
             is_highlighted = (i == self._highlighted_slice)
 
@@ -380,7 +447,9 @@ class SliceExplorerCanvas(FigureCanvas):
             alpha = 0.9 if is_highlighted else 0.15
             Z = np.full_like(X, z_coord)
 
-            if self._show_contours and len(levels_pos) > 0:
+            if self._render_mode == "heatmap":
+                self._draw_slice_heatmap(X, Y, z_coord, slice_data, alpha, is_highlighted, norm, cmap)
+            elif self._show_contours and len(levels_pos) > 0:
                 self._draw_slice_contours(
                     X, Y, Z, slice_data, z_coord,
                     levels_pos, levels_neg,
@@ -458,6 +527,70 @@ class SliceExplorerCanvas(FigureCanvas):
         poly = Poly3DCollection(verts, alpha=face_alpha, facecolor=color,
                                 edgecolor='#999999', linewidth=0.5)
         self.ax.add_collection3d(poly)
+
+    def _draw_slice_heatmap(self, X, Y, z_coord, slice_data, alpha, is_highlighted,
+                            norm, cmap):
+        """Draw a slice as a color-mapped heatmap using batched quad patches.
+
+        For 3D rendering, we divide the slice into small quads, each colored
+        according to its density value. All quads are batched into a single
+        Poly3DCollection for efficiency.
+        """
+        nx, ny = slice_data.shape
+
+        # Subsample for performance - use every nth point
+        step = max(1, min(nx, ny) // 20)  # Aim for ~20x20 quads max
+
+        # Collect all quads and colors
+        all_verts = []
+        all_colors = []
+
+        for i in range(0, nx - step, step):
+            for j in range(0, ny - step, step):
+                # Get corner coordinates
+                x0, x1 = X[i, j], X[min(i + step, nx - 1), j]
+                y0, y1 = Y[i, j], Y[i, min(j + step, ny - 1)]
+
+                # Average density in this quad
+                avg_density = slice_data[i:i+step, j:j+step].mean()
+
+                # Get color from colormap
+                color = cmap(norm(avg_density))
+
+                # Add quad vertices
+                all_verts.append([
+                    (x0, y0, z_coord),
+                    (x1, y0, z_coord),
+                    (x1, y1, z_coord),
+                    (x0, y1, z_coord)
+                ])
+                all_colors.append(color[:3])  # RGB only
+
+        # Create single batched collection if we have quads
+        if all_verts:
+            face_alpha = 0.85 if is_highlighted else 0.25
+            poly = Poly3DCollection(
+                all_verts,
+                alpha=face_alpha,
+                facecolors=all_colors,
+                edgecolors='none',
+                linewidths=0
+            )
+            self.ax.add_collection3d(poly)
+
+        # Draw edge around the highlighted slice using a line plot
+        if is_highlighted:
+            x_min, x_max = X.min(), X.max()
+            y_min, y_max = Y.min(), Y.max()
+            # Draw rectangle as lines
+            self.ax.plot(
+                [x_min, x_max, x_max, x_min, x_min],
+                [y_min, y_min, y_max, y_max, y_min],
+                [z_coord, z_coord, z_coord, z_coord, z_coord],
+                color='#333333',
+                linewidth=1.5,
+                zorder=10
+            )
 
     def _draw_bonds(self):
         """Draw bonds between atoms in 3D and store bond info for click detection."""
@@ -720,6 +853,30 @@ class SliceExplorerCanvas(FigureCanvas):
         if self._density_cube:
             self._draw_slices()
 
+    def set_render_mode(self, mode: str):
+        """Set render mode ('contour' or 'heatmap').
+
+        Args:
+            mode: 'contour' for contour lines, 'heatmap' for color-mapped bitmap
+        """
+        self._render_mode = mode
+        if self._density_cube:
+            self._draw_slices()
+
+    def set_heatmap_colormap(self, colormap: str):
+        """Set the colormap for heatmap mode.
+
+        Args:
+            colormap: matplotlib colormap name (e.g., 'RdYlBu_r', 'viridis', 'hot')
+        """
+        self._heatmap_colormap = colormap
+        if self._density_cube and self._render_mode == "heatmap":
+            self._draw_slices()
+
+    def get_render_mode(self) -> str:
+        """Get current render mode."""
+        return self._render_mode
+
     def _apply_zoom(self):
         """Apply current zoom level to axis limits."""
         if self._base_limits is None:
@@ -920,6 +1077,7 @@ class SliceExplorer(QWidget):
         super().__init__(parent)
         self._promolecule_cube: DensityCube | None = None
         self._deformation_cube: DensityCube | None = None
+        self._elf_cube: DensityCube | None = None
 
         # Animation state
         self._animation_timer = QTimer(self)
@@ -962,7 +1120,28 @@ class SliceExplorer(QWidget):
         type_group.addWidget(self.density_combo)
         row1.addLayout(type_group)
 
-        # Color mode toggle buttons
+        # Render mode toggle buttons (Contour vs Heatmap)
+        render_group = QHBoxLayout()
+        render_group.setSpacing(2)
+        self.contour_mode_btn = QPushButton("Contour")
+        self.contour_mode_btn.setCheckable(True)
+        self.contour_mode_btn.setChecked(True)
+        self.contour_mode_btn.setToolTip("Show contour lines (good for printing)")
+        self.contour_mode_btn.setMaximumWidth(60)
+        self.heatmap_mode_btn = QPushButton("Heatmap")
+        self.heatmap_mode_btn.setCheckable(True)
+        self.heatmap_mode_btn.setToolTip("Show color gradient (good for screen visualization)")
+        self.heatmap_mode_btn.setMaximumWidth(60)
+        # Button group for exclusive selection
+        self.render_mode_group = QButtonGroup(self)
+        self.render_mode_group.addButton(self.contour_mode_btn, 0)
+        self.render_mode_group.addButton(self.heatmap_mode_btn, 1)
+        self.render_mode_group.idClicked.connect(self._on_render_mode_changed)
+        render_group.addWidget(self.contour_mode_btn)
+        render_group.addWidget(self.heatmap_mode_btn)
+        row1.addLayout(render_group)
+
+        # Color mode toggle buttons (only for contour mode)
         color_group = QHBoxLayout()
         color_group.setSpacing(2)
         self.bw_btn = QPushButton("B&&W")
@@ -1158,10 +1337,12 @@ class SliceExplorer(QWidget):
 
     def set_density_cubes(self, promolecule: DensityCube | None = None,
                           deformation: DensityCube | None = None,
+                          elf: DensityCube | None = None,
                           n_slices: int = 15):
         """Set the density cubes to visualize."""
         self._promolecule_cube = promolecule
         self._deformation_cube = deformation
+        self._elf_cube = elf
 
         # Update slice slider
         self.slice_slider.setMaximum(n_slices - 1)
@@ -1174,12 +1355,21 @@ class SliceExplorer(QWidget):
             self.density_combo.addItem("Promolecule")
         if deformation is not None:
             self.density_combo.addItem("Deformation")
+        if elf is not None:
+            self.density_combo.addItem("ELF")
 
         # Show first available density
         if promolecule is not None:
             self.canvas.set_density_cube(promolecule, "promolecule")
         elif deformation is not None:
             self.canvas.set_density_cube(deformation, "deformation")
+        elif elf is not None:
+            self.canvas.set_density_cube(elf, "elf")
+
+        # Auto-switch to heatmap mode for ELF
+        if elf is not None and promolecule is None and deformation is None:
+            self.heatmap_mode_btn.setChecked(True)
+            self._on_render_mode_changed(1)
 
         self._update_slice_label()
 
@@ -1190,6 +1380,12 @@ class SliceExplorer(QWidget):
             self.canvas.set_density_cube(self._promolecule_cube, "promolecule")
         elif text == "deformation" and self._deformation_cube:
             self.canvas.set_density_cube(self._deformation_cube, "deformation")
+        elif text == "elf" and self._elf_cube:
+            self.canvas.set_density_cube(self._elf_cube, "elf")
+            # Suggest heatmap mode for ELF
+            if self.canvas.get_render_mode() == "contour":
+                self.heatmap_mode_btn.setChecked(True)
+                self._on_render_mode_changed(1)
 
     def _on_slice_changed(self, value: int):
         """Handle slice slider change."""
@@ -1200,6 +1396,17 @@ class SliceExplorer(QWidget):
         """Handle color mode toggle button change."""
         mode = "bw" if button_id == 0 else "color"
         self.canvas.set_color_mode(mode)
+
+    def _on_render_mode_changed(self, button_id: int):
+        """Handle render mode toggle button change."""
+        mode = "contour" if button_id == 0 else "heatmap"
+        self.canvas.set_render_mode(mode)
+        # Disable/enable contour-specific controls
+        is_contour = (mode == "contour")
+        self.bw_btn.setEnabled(is_contour)
+        self.color_btn.setEnabled(is_contour)
+        self.contours_check.setEnabled(is_contour)
+        self.contour_scale_slider.setEnabled(is_contour)
 
     def _on_contours_toggled(self, state: int):
         """Handle contours checkbox toggle."""
@@ -1237,6 +1444,7 @@ class SliceExplorer(QWidget):
         """Clear the explorer."""
         self._promolecule_cube = None
         self._deformation_cube = None
+        self._elf_cube = None
         self.canvas._density_cube = None
         self.canvas._setup_3d_axes()
         self.canvas.draw()
@@ -1263,6 +1471,8 @@ class SliceExplorer(QWidget):
             contour_scale=self.canvas.get_contour_scale(),
             origin=cube.origin if cube else None,
             axes=cube.axes if cube else None,
+            render_mode=self.canvas.get_render_mode(),
+            colormap=self.canvas._heatmap_colormap,
         )
         self._preview_dialog.show()
         self._preview_dialog.raise_()

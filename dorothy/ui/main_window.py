@@ -87,12 +87,13 @@ class XtbDownloadWorker(QThread):
 class XtbDensityWorker(QThread):
     """Background thread for xTB density calculation."""
     progress = pyqtSignal(str)  # status message
-    finished = pyqtSignal(object, object)  # promolecule_cube, deformation_cube
+    finished = pyqtSignal(object, object, object)  # promolecule_cube, deformation_cube, elf_cube
 
-    def __init__(self, structure: MoleculeStructure, plane_definition=None):
+    def __init__(self, structure: MoleculeStructure, plane_definition=None, calculate_elf: bool = True):
         super().__init__()
         self.structure = structure
         self.plane_definition = plane_definition
+        self.calculate_elf = calculate_elf
 
     def run(self):
         from dorothy.core.xtb_manager import is_xtb_installed, run_xtb_density
@@ -105,6 +106,7 @@ class XtbDensityWorker(QThread):
 
         promolecule = None
         deformation = None
+        elf_cube = None
 
         try:
             # Always create promolecule (fast) as fallback
@@ -121,12 +123,20 @@ class XtbDensityWorker(QThread):
             if is_xtb_installed():
                 self.progress.emit("Running xTB calculation...")
                 with tempfile.TemporaryDirectory() as tmp_dir:
-                    cube_path = run_xtb_density(
+                    result = run_xtb_density(
                         self.structure,
                         Path(tmp_dir),
                         lambda msg: self.progress.emit(msg),
-                        plane_definition=self.plane_definition
+                        plane_definition=self.plane_definition,
+                        calculate_elf=self.calculate_elf
                     )
+
+                    # Handle both old (single path) and new (tuple) return formats
+                    if self.calculate_elf:
+                        cube_path, elf_path = result
+                    else:
+                        cube_path = result
+                        elf_path = None
 
                     if cube_path:
                         self.progress.emit("Processing density data...")
@@ -139,12 +149,16 @@ class XtbDensityWorker(QThread):
                                 self.structure
                             )
 
+                    if elf_path:
+                        self.progress.emit("Processing ELF data...")
+                        elf_cube = parse_cube_file(elf_path)
+
             self.progress.emit("Ready")
 
         except Exception as e:
             self.progress.emit(f"Error: {e}")
 
-        self.finished.emit(promolecule, deformation)
+        self.finished.emit(promolecule, deformation, elf_cube)
 
 
 class XtbDownloadDialog(QDialog):
@@ -1146,18 +1160,24 @@ class MainWindow(QMainWindow):
         """Handle xTB density progress updates."""
         self.mol_info_label.setText(message)
 
-    def _on_xtb_density_complete(self, promolecule, deformation):
+    def _on_xtb_density_complete(self, promolecule, deformation, elf_cube=None):
         """Handle xTB density calculation completion."""
         if promolecule:
             n_slices = self.slice_spinbox.value()
             self.slice_explorer.set_density_cubes(
                 promolecule=promolecule,
                 deformation=deformation,
+                elf=elf_cube,
                 n_slices=n_slices
             )
 
             # Update info label
-            if deformation:
+            if deformation and elf_cube:
+                self.mol_info_label.setText(
+                    f"{self.selected_molecule.formula} - "
+                    "Deformation density + ELF available"
+                )
+            elif deformation:
                 self.mol_info_label.setText(
                     f"{self.selected_molecule.formula} - "
                     "Deformation density available (showing bonds)"
