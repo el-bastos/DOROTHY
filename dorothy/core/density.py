@@ -249,7 +249,7 @@ def calculate_promolecule_density(
 def calculate_deformation_density(
     molecular_density: DensityCube,
     structure: MoleculeStructure,
-) -> DensityCube:
+) -> tuple[DensityCube, DensityCube]:
     """
     Calculate deformation density = molecular - promolecule.
 
@@ -258,7 +258,8 @@ def calculate_deformation_density(
         structure: Molecule structure (used only for element symbols)
 
     Returns:
-        Deformation density cube
+        Tuple of (promolecule_cube, deformation_cube) - both on the same grid
+        as the molecular density for consistent animation blending.
     """
     # Use atom coordinates from the cube file - these match exactly what xTB used
     # The cube file stores atoms as (Z, x, y, z) in Bohr
@@ -267,7 +268,7 @@ def calculate_deformation_density(
     # Convert from Bohr to Angstrom
     coords = np.array([[atom[1], atom[2], atom[3]] for atom in molecular_density.atoms]) * 0.529177
 
-    promolecule = calculate_promolecule_density(
+    promolecule_data = calculate_promolecule_density(
         coords,
         symbols,
         molecular_density.origin,
@@ -282,20 +283,29 @@ def calculate_deformation_density(
     # Normalize promolecule to have same integrated electron count
     # ∫ρ dV = Σ ρ_i * dV, so we compare sums directly (dV cancels)
     mol_integral = np.sum(molecular_density.data) * dV
-    pro_integral = np.sum(promolecule) * dV
+    pro_integral = np.sum(promolecule_data) * dV
 
     if pro_integral > 0:
         # Scale promolecule so integrated density matches molecular
-        promolecule *= mol_integral / pro_integral
+        promolecule_data *= mol_integral / pro_integral
 
-    deformation_data = molecular_density.data - promolecule
+    deformation_data = molecular_density.data - promolecule_data
 
-    return DensityCube(
+    promolecule_cube = DensityCube(
+        origin=molecular_density.origin,
+        axes=molecular_density.axes,
+        data=promolecule_data,
+        atoms=molecular_density.atoms,
+    )
+
+    deformation_cube = DensityCube(
         origin=molecular_density.origin,
         axes=molecular_density.axes,
         data=deformation_data,
         atoms=molecular_density.atoms,
     )
+
+    return promolecule_cube, deformation_cube
 
 
 def create_density_cube_from_structure(

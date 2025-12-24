@@ -139,7 +139,8 @@ class GenerationPipeline:
             deformation_density: Optional[DensityCube] = None
             if molecular_density and settings.generate_deformation:
                 self._report_progress("Computing deformation density...", 50)
-                deformation_density = calculate_deformation_density(
+                # calculate_deformation_density returns (promolecule, deformation) tuple
+                _, deformation_density = calculate_deformation_density(
                     molecular_density, structure
                 )
 

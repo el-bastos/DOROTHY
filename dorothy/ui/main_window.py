@@ -107,7 +107,7 @@ class XtbDensityWorker(QThread):
         deformation = None
 
         try:
-            # Always create promolecule (fast)
+            # Always create promolecule (fast) as fallback
             # Use plane rotation if provided, otherwise use principal axes
             self.progress.emit("Generating promolecule density...")
             promolecule = create_density_cube_from_structure(
@@ -132,7 +132,9 @@ class XtbDensityWorker(QThread):
                         self.progress.emit("Processing density data...")
                         molecular = parse_cube_file(cube_path)
                         if molecular:
-                            deformation = calculate_deformation_density(
+                            # Get both promolecule and deformation on the same grid
+                            # This ensures they can be blended for animation
+                            promolecule, deformation = calculate_deformation_density(
                                 molecular,
                                 self.structure
                             )

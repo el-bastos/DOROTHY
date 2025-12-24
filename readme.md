@@ -6,7 +6,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 
 ## Current Status
 
-**Version:** 0.4.0 (Development)
+**Version:** 0.4.1 (Development)
 
 ### What's Working
 
@@ -194,6 +194,9 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 ---
 
 ## Changelog
+
+### v0.4.1 (December 2024)
+- **Fixed animation crash**: Promolecule and deformation cubes now use matching grids, preventing ValueError when blending densities during animation
 
 ### v0.4.0 (December 2024)
 - **View 2D Button**: Opens current slice as a 2D contour plot with atom positions overlaid
