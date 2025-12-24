@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
 )
 from PyQt6.QtCore import Qt, QCoreApplication, QThread, pyqtSignal
-from PyQt6.QtGui import QFont, QDesktopServices
+from PyQt6.QtGui import QFont, QDesktopServices, QPixmap
 from PyQt6.QtCore import QUrl
 
 from dorothy.core.cod_search import CODSearch, MoleculeResult
@@ -346,14 +346,23 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(40, 40, 40, 40)
         layout.setSpacing(20)
 
-        # Title
-        title = QLabel(self.tr("Dorothy"))
-        title_font = QFont()
-        title_font.setPointSize(32)
-        title_font.setBold(True)
-        title.setFont(title_font)
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title)
+        # Logo
+        logo_label = QLabel()
+        logo_path = Path(__file__).parent.parent.parent / "logo" / "dorothy_logo.png"
+        if logo_path.exists():
+            pixmap = QPixmap(str(logo_path))
+            # Scale to reasonable size while keeping aspect ratio
+            scaled = pixmap.scaledToWidth(400, Qt.TransformationMode.SmoothTransformation)
+            logo_label.setPixmap(scaled)
+        else:
+            # Fallback to text if logo not found
+            logo_label.setText(self.tr("Dorothy"))
+            title_font = QFont()
+            title_font.setPointSize(32)
+            title_font.setBold(True)
+            logo_label.setFont(title_font)
+        logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(logo_label)
 
         # Subtitle
         subtitle = QLabel(self.tr("Crystallography Teaching Tool"))
@@ -575,9 +584,11 @@ class MainWindow(QMainWindow):
 
         content.addLayout(viewer_container, stretch=1)
 
-        # Right: Settings panel
-        settings_panel = QVBoxLayout()
+        # Right: Settings panel (only visible in 3D view)
+        self.settings_widget = QWidget()
+        settings_panel = QVBoxLayout(self.settings_widget)
         settings_panel.setSpacing(15)
+        settings_panel.setContentsMargins(0, 0, 0, 0)
 
         # Resolution setting
         res_group = QGroupBox(self.tr("Resolution"))
@@ -663,7 +674,9 @@ class MainWindow(QMainWindow):
         self.generate_btn.clicked.connect(self._on_generate)
         settings_panel.addWidget(self.generate_btn)
 
-        content.addLayout(settings_panel, stretch=0)
+        # Start hidden (shown when switching to 3D view)
+        self.settings_widget.hide()
+        content.addWidget(self.settings_widget)
 
         layout.addLayout(content)
 
@@ -1098,10 +1111,12 @@ class MainWindow(QMainWindow):
             self.view_2d_btn.setChecked(True)
             self.view_3d_btn.setChecked(False)
             self.viewer_stack.setCurrentWidget(self.molecule_viewer)
+            self.settings_widget.hide()
         else:
             self.view_2d_btn.setChecked(False)
             self.view_3d_btn.setChecked(True)
             self.viewer_stack.setCurrentWidget(self.slice_explorer)
+            self.settings_widget.show()
 
             # Auto-run xTB calculation for 3D preview if not already done
             if self.selected_structure and self.slice_explorer._promolecule_cube is None:

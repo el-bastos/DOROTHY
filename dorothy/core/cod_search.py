@@ -144,50 +144,62 @@ class CODSearch:
             total += count
         return total
 
-    def _search_cod(self, query: str) -> list[MoleculeResult]:
-        """Search COD database online."""
-        # COD API requires POST with text1 parameter
-        data = {
-            "text1": query,
-            "format": "json",
-        }
+    def _search_cod(self, query: str, retries: int = 2) -> list[MoleculeResult]:
+        """Search COD database online with retry logic."""
+        import time
 
-        response = requests.post(
-            f"{self.BASE_URL}/result.php",
-            data=data,
-            headers=self.HEADERS,
-            timeout=self.TIMEOUT,
-            verify=False,  # COD has SSL certificate mismatch
-        )
-        response.raise_for_status()
+        last_error = None
+        for attempt in range(retries + 1):
+            try:
+                # COD API requires POST with text1 parameter
+                data = {
+                    "text1": query,
+                    "format": "json",
+                }
 
-        # COD returns a JSON array directly, not an object with "results" key
-        data = response.json()
-        results = []
+                response = requests.post(
+                    f"{self.BASE_URL}/result.php",
+                    data=data,
+                    headers=self.HEADERS,
+                    timeout=self.TIMEOUT,
+                    verify=False,  # COD has SSL certificate mismatch
+                )
+                response.raise_for_status()
 
-        # Handle both array (current API) and object with "results" key (legacy)
-        entries = data if isinstance(data, list) else data.get("results", [])
+                # COD returns a JSON array directly, not an object with "results" key
+                result_data = response.json()
+                results = []
 
-        for entry in entries[:20]:  # Limit to 20 results
-            # Get name: prefer commonname, fall back to chemname
-            name = entry.get("commonname") or entry.get("chemname") or "Unknown"
+                # Handle both array (current API) and object with "results" key (legacy)
+                entries = result_data if isinstance(result_data, list) else result_data.get("results", [])
 
-            # COD doesn't provide atom count directly
-            # nel = number of element types, Z = molecules per unit cell
-            # We estimate from formula if possible, otherwise use 0
-            formula = entry.get("formula", "").strip("- ")
-            atom_count = self._estimate_atom_count(formula)
+                for entry in entries[:20]:  # Limit to 20 results
+                    # Get name: prefer commonname, fall back to chemname
+                    name = entry.get("commonname") or entry.get("chemname") or "Unknown"
 
-            results.append(MoleculeResult(
-                cod_id=str(entry.get("file", "")),
-                name=name,
-                formula=formula,
-                atom_count=atom_count,
-                space_group=entry.get("sg", ""),
-                is_local=False,
-            ))
+                    # COD doesn't provide atom count directly
+                    # nel = number of element types, Z = molecules per unit cell
+                    # We estimate from formula if possible, otherwise use 0
+                    formula = entry.get("formula", "").strip("- ")
+                    atom_count = self._estimate_atom_count(formula)
 
-        return results
+                    results.append(MoleculeResult(
+                        cod_id=str(entry.get("file", "")),
+                        name=name,
+                        formula=formula,
+                        atom_count=atom_count,
+                        space_group=entry.get("sg", ""),
+                        is_local=False,
+                    ))
+
+                return results
+
+            except (requests.RequestException, requests.Timeout, ValueError) as e:
+                last_error = e
+                if attempt < retries:
+                    time.sleep(0.5 * (attempt + 1))  # Backoff: 0.5s, 1s
+                    continue
+                raise last_error
 
     def get_structure(self, result: MoleculeResult) -> Optional[MoleculeStructure]:
         """
@@ -218,17 +230,24 @@ class CODSearch:
         """Get the URL to download a CIF file from COD."""
         return f"{self.BASE_URL}/{cod_id}.cif"
 
-    def download_cif(self, cod_id: str) -> Optional[str]:
-        """Download CIF file content from COD."""
-        try:
-            url = self.get_cif_url(cod_id)
-            response = requests.get(
-                url,
-                headers=self.HEADERS,
-                timeout=self.TIMEOUT,
-                verify=False,  # COD has SSL certificate mismatch
-            )
-            response.raise_for_status()
-            return response.text
-        except (requests.RequestException, requests.Timeout):
-            return None
+    def download_cif(self, cod_id: str, retries: int = 2) -> Optional[str]:
+        """Download CIF file content from COD with retry logic."""
+        import time
+
+        url = self.get_cif_url(cod_id)
+        for attempt in range(retries + 1):
+            try:
+                response = requests.get(
+                    url,
+                    headers=self.HEADERS,
+                    timeout=self.TIMEOUT,
+                    verify=False,  # COD has SSL certificate mismatch
+                )
+                response.raise_for_status()
+                return response.text
+            except (requests.RequestException, requests.Timeout):
+                if attempt < retries:
+                    time.sleep(0.5 * (attempt + 1))  # Backoff: 0.5s, 1s
+                    continue
+                return None
+        return None

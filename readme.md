@@ -6,7 +6,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 
 ## Current Status
 
-**Version:** 0.4.1 (Development)
+**Version:** 0.4.2 (Development)
 
 ### What's Working
 
@@ -194,6 +194,11 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 ---
 
 ## Changelog
+
+### v0.4.2 (December 2024)
+- **Logo on home screen**: Replaced text title with Dorothy logo image
+- **Improved COD reliability**: Added retry logic with exponential backoff for COD API searches and CIF downloads
+- **Cleaner UI flow**: Export settings now only appear in 3D view mode, keeping 2D view focused on molecule visualization
 
 ### v0.4.1 (December 2024)
 - **Fixed animation crash**: Promolecule and deformation cubes now use matching grids, preventing ValueError when blending densities during animation
