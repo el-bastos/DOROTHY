@@ -71,7 +71,7 @@ class Slice2DPreviewDialog(QDialog):
         Args:
             slice_data: 2D array of density values
             z_coord: Z-coordinate of the slice in Angstrom
-            density_type: "promolecule", "deformation", or "elf"
+            density_type: "promolecule" or "deformation"
             color_mode: "bw" or "color"
             atoms: List of (Z, x, y, z) in Bohr - atoms near this slice will be shown
             contour_scale: Contour level scale factor
@@ -99,10 +99,7 @@ class Slice2DPreviewDialog(QDialog):
 
         # Heatmap mode - use imshow
         if render_mode == "heatmap":
-            if density_type == "elf":
-                vmin, vmax = 0.0, 1.0
-                info_text = f"ELF at z = {z_coord:.2f} Å\nRed = localized | Blue = delocalized"
-            elif density_type == "deformation":
+            if density_type == "deformation":
                 max_abs = max(abs(slice_data.min()), abs(slice_data.max()))
                 vmin, vmax = -max_abs, max_abs
                 info_text = f"Deformation density at z = {z_coord:.2f} Å\nRed = accumulation | Blue = depletion"
@@ -148,16 +145,6 @@ class Slice2DPreviewDialog(QDialog):
                 self.info_label.setText(
                     f"Deformation density at z = {z_coord:.2f} Å\n"
                     "Solid = electron accumulation (bonds) | Dashed = depletion"
-                )
-            elif density_type == "elf":
-                # ELF contours at fixed levels
-                levels = [0.2, 0.4, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9]
-                color = 'black' if color_mode == 'bw' else '#2563eb'
-                cs = ax.contour(X, Y, slice_data, levels=levels, colors=color, linewidths=1.0)
-                ax.clabel(cs, inline=True, fontsize=8, fmt='%.1f')
-                self.info_label.setText(
-                    f"ELF at z = {z_coord:.2f} Å\n"
-                    "0.5 = electron gas | ~0.85 = covalent bond | ~1.0 = lone pair"
                 )
             else:
                 # Promolecule
@@ -424,14 +411,10 @@ class SliceExplorerCanvas(FigureCanvas):
         # Calculate global min/max for consistent heatmap normalization
         if self._render_mode == "heatmap":
             all_data = np.concatenate([s.flatten() for _, s in slices])
-            if self._density_type == "deformation" or self._density_type == "elf":
-                # For deformation/ELF, use symmetric normalization around zero
-                # ELF is 0-1, deformation is symmetric around 0
-                if self._density_type == "elf":
-                    vmin, vmax = 0.0, 1.0
-                else:
-                    max_abs = max(abs(all_data.min()), abs(all_data.max()))
-                    vmin, vmax = -max_abs, max_abs
+            if self._density_type == "deformation":
+                # For deformation, use symmetric normalization around zero
+                max_abs = max(abs(all_data.min()), abs(all_data.max()))
+                vmin, vmax = -max_abs, max_abs
             else:
                 vmin, vmax = all_data.min(), all_data.max()
             norm = Normalize(vmin=vmin, vmax=vmax)
@@ -1077,7 +1060,6 @@ class SliceExplorer(QWidget):
         super().__init__(parent)
         self._promolecule_cube: DensityCube | None = None
         self._deformation_cube: DensityCube | None = None
-        self._elf_cube: DensityCube | None = None
 
         # Animation state
         self._animation_timer = QTimer(self)
@@ -1337,12 +1319,10 @@ class SliceExplorer(QWidget):
 
     def set_density_cubes(self, promolecule: DensityCube | None = None,
                           deformation: DensityCube | None = None,
-                          elf: DensityCube | None = None,
                           n_slices: int = 15):
         """Set the density cubes to visualize."""
         self._promolecule_cube = promolecule
         self._deformation_cube = deformation
-        self._elf_cube = elf
 
         # Update slice slider
         self.slice_slider.setMaximum(n_slices - 1)
@@ -1355,21 +1335,12 @@ class SliceExplorer(QWidget):
             self.density_combo.addItem("Promolecule")
         if deformation is not None:
             self.density_combo.addItem("Deformation")
-        if elf is not None:
-            self.density_combo.addItem("ELF")
 
         # Show first available density
         if promolecule is not None:
             self.canvas.set_density_cube(promolecule, "promolecule")
         elif deformation is not None:
             self.canvas.set_density_cube(deformation, "deformation")
-        elif elf is not None:
-            self.canvas.set_density_cube(elf, "elf")
-
-        # Auto-switch to heatmap mode for ELF
-        if elf is not None and promolecule is None and deformation is None:
-            self.heatmap_mode_btn.setChecked(True)
-            self._on_render_mode_changed(1)
 
         self._update_slice_label()
 
@@ -1380,12 +1351,6 @@ class SliceExplorer(QWidget):
             self.canvas.set_density_cube(self._promolecule_cube, "promolecule")
         elif text == "deformation" and self._deformation_cube:
             self.canvas.set_density_cube(self._deformation_cube, "deformation")
-        elif text == "elf" and self._elf_cube:
-            self.canvas.set_density_cube(self._elf_cube, "elf")
-            # Suggest heatmap mode for ELF
-            if self.canvas.get_render_mode() == "contour":
-                self.heatmap_mode_btn.setChecked(True)
-                self._on_render_mode_changed(1)
 
     def _on_slice_changed(self, value: int):
         """Handle slice slider change."""
@@ -1444,7 +1409,6 @@ class SliceExplorer(QWidget):
         """Clear the explorer."""
         self._promolecule_cube = None
         self._deformation_cube = None
-        self._elf_cube = None
         self.canvas._density_cube = None
         self.canvas._setup_3d_axes()
         self.canvas.draw()

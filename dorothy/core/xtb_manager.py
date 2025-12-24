@@ -253,8 +253,7 @@ def run_xtb_density(
     output_dir: Path,
     progress_callback: Optional[Callable[[str], None]] = None,
     plane_definition: Optional["PlaneDefinition"] = None,
-    calculate_elf: bool = False
-) -> Optional[Path] | tuple[Optional[Path], Optional[Path]]:
+) -> Optional[Path]:
     """
     Run xTB calculation to generate electron density cube file.
 
@@ -265,15 +264,13 @@ def run_xtb_density(
         plane_definition: If provided, rotate molecule so the user-selected plane
                          becomes horizontal before calculation. This ensures
                          Z-slices cut parallel to the user's chosen plane.
-        calculate_elf: If True, also calculate ELF (Electron Localization Function)
 
     Returns:
-        If calculate_elf is False: Path to density cube file, or None if failed
-        If calculate_elf is True: Tuple of (density_path, elf_path), either may be None
+        Path to density cube file, or None if failed
     """
     exe = get_xtb_executable()
     if not exe:
-        return (None, None) if calculate_elf else None
+        return None
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -282,16 +279,12 @@ def run_xtb_density(
     xyz_file = output_dir / "molecule.xyz"
     write_xyz_file(structure, xyz_file, plane_definition=plane_definition)
 
-    # Write xTB input file to request density and optionally ELF cube output
+    # Write xTB input file to request density cube output
     input_file = output_dir / "xtb.inp"
-    if calculate_elf:
-        input_file.write_text("$write\n   density=true\n   elf=true\n$end\n")
-    else:
-        input_file.write_text("$write\n   density=true\n$end\n")
+    input_file.write_text("$write\n   density=true\n$end\n")
 
     if progress_callback:
-        msg = "Running xTB calculation (density + ELF)..." if calculate_elf else "Running xTB calculation..."
-        progress_callback(msg)
+        progress_callback("Running xTB calculation...")
 
     try:
         # Run xTB with density output via input file
@@ -305,7 +298,7 @@ def run_xtb_density(
 
         if result.returncode != 0:
             print(f"xTB error: {result.stderr}")
-            return (None, None) if calculate_elf else None
+            return None
 
         # xTB outputs density.cub when density=true is set
         density_file = output_dir / "density.cub"
@@ -319,25 +312,11 @@ def run_xtb_density(
             else:
                 density_file = None
 
-        if calculate_elf:
-            # xTB outputs elf.cub when elf=true is set
-            elf_file = output_dir / "elf.cub"
-            if not elf_file.exists():
-                # Check for other possible ELF file names
-                for pattern in ["*elf*.cub", "*elf*.cube"]:
-                    cubes = list(output_dir.glob(pattern))
-                    if cubes:
-                        elf_file = cubes[0]
-                        break
-                else:
-                    elf_file = None
-            return (density_file, elf_file)
-        else:
-            return density_file
+        return density_file
 
     except subprocess.TimeoutExpired:
         print("xTB calculation timed out")
-        return (None, None) if calculate_elf else None
+        return None
     except Exception as e:
         print(f"xTB error: {e}")
-        return (None, None) if calculate_elf else None
+        return None

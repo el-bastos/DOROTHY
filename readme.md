@@ -19,8 +19,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 - **Auto xTB on 3D View** - Automatically calculates deformation density when switching to 3D
 - **Generation Pipeline** - Promolecule density calculation, contour slicing, PDF export
 - **Principal Axes Alignment** - Molecules auto-rotated for optimal slicing orientation
-- **xTB Integration** - Deformation density + ELF via xTB (Homebrew/conda), with install dialog
-- **ELF Visualization** - Electron Localization Function shows bonding regions intuitively
+- **xTB Integration** - Deformation density via xTB (Homebrew/conda), with install dialog
 - **Heatmap Mode** - Color gradient rendering for screen visualization (vs contours for print)
 - **Detail Level Settings** - Simple mode (beginners) vs Advanced mode (shows π-bonds)
 - **Fixed Contour Levels** - Advanced mode uses consistent levels across slices for comparability
@@ -198,14 +197,9 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 ## Changelog
 
 ### v0.5.0 (December 2024)
-- **ELF (Electron Localization Function)**: New density type calculated via xTB
-  - Shows electron localization: ~1.0 = lone pairs, ~0.85 = covalent bonds, ~0.5 = electron gas
-  - Automatically calculated alongside deformation density
-  - Available in density type dropdown when xTB is installed
 - **Heatmap Rendering Mode**: Toggle between contour lines and color gradient display
   - Contour mode: Traditional line-based visualization (best for printing)
   - Heatmap mode: Color-mapped bitmap with `RdYlBu_r` colormap (best for screen)
-  - Auto-switches to heatmap when viewing ELF for intuitive visualization
 - **2D Preview supports heatmaps**: View 2D button shows heatmap with colorbar when in heatmap mode
 
 ### v0.4.2 (December 2024)
