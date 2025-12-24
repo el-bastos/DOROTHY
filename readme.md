@@ -6,7 +6,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 
 ## Current Status
 
-**Version:** 0.5.0 (Development)
+**Version:** 0.5.1 (Development)
 
 ### What's Working
 
@@ -67,11 +67,13 @@ Dorothy/
 │   ├── __init__.py
 │   ├── main.py                 # Application entry point
 │   ├── core/
+│   │   ├── constants.py        # Physical constants and settings
 │   │   ├── cif_parser.py       # CIF file parsing
 │   │   ├── cod_search.py       # COD + local molecule search
 │   │   ├── density.py          # Electron density calculations
 │   │   ├── contours.py         # Contour generation, PDF export
 │   │   ├── generator.py        # Main generation pipeline
+│   │   ├── selection.py        # Atom selection for plane definition
 │   │   └── xtb_manager.py      # xTB download and execution
 │   ├── ui/
 │   │   ├── main_window.py      # Main application window
@@ -79,6 +81,10 @@ Dorothy/
 │   │   └── slice_explorer.py   # 3D interactive slice preview
 │   └── resources/
 │       └── translations/       # i18n files
+├── tests/                      # pytest test suite
+│   ├── test_density.py         # Density calculation tests
+│   ├── test_cif_parser.py      # CIF parsing tests
+│   └── test_selection.py       # Plane selection tests
 ├── examples/
 │   └── aspirin/                # Example CIF files
 ├── pyproject.toml
@@ -139,7 +145,6 @@ The app auto-discovers these on startup.
 ### Future
 4. App packaging for distribution (macOS .dmg, Windows .exe, Linux AppImage)
 5. Additional languages (Portuguese, Spanish)
-6. Unit tests
 
 ---
 
@@ -195,6 +200,13 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 ---
 
 ## Changelog
+
+### v0.5.1 (December 2024)
+- **Centralized constants**: New `constants.py` module for physical constants, element data, and settings
+- **Test suite**: Added 42 pytest tests for density calculations, CIF parsing, and plane selection
+- **Proper logging**: Replaced `print()` statements with Python `logging` module
+- **Worker thread cleanup**: Fixed potential thread accumulation in background workers
+- **Code quality**: Removed magic numbers, improved type hints
 
 ### v0.5.0 (December 2024)
 - **Heatmap Rendering Mode**: Toggle between contour lines and color gradient display

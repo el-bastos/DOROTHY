@@ -7,29 +7,25 @@ Handles:
 - Computing deformation density (molecular - promolecule)
 """
 
+import logging
 import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from dorothy.core.cif_parser import MoleculeStructure
+from dorothy.core.constants import (
+    BOHR_TO_ANGSTROM,
+    ANGSTROM_TO_BOHR,
+    ATOMIC_DENSITY_PARAMS,
+    Z_TO_SYMBOL,
+    SYMBOL_TO_Z,
+    GRID_SPACING,
+    GRID_PADDING,
+    MOLECULE_EXTENT_PADDING,
+)
 
-
-# Atomic electron densities - simplified Slater-type functions
-# Parameters: (coefficient, exponent) for sum of Gaussians approximation
-# These give reasonable spherical atomic densities for visualization
-ATOMIC_DENSITY_PARAMS = {
-    'H': [(0.2829, 1.0), (0.4858, 0.3)],
-    'C': [(2.0, 2.5), (4.0, 0.8)],
-    'N': [(2.5, 2.8), (4.5, 0.9)],
-    'O': [(3.0, 3.2), (5.0, 1.0)],
-    'S': [(6.0, 2.0), (10.0, 0.5)],
-    'P': [(5.0, 1.8), (10.0, 0.5)],
-    'F': [(3.5, 3.5), (5.5, 1.1)],
-    'Cl': [(7.0, 2.2), (10.0, 0.6)],
-    'Br': [(15.0, 1.8), (20.0, 0.4)],
-    'I': [(25.0, 1.5), (30.0, 0.35)],
-}
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -47,7 +43,7 @@ class DensityCube:
     @property
     def grid_spacing(self) -> np.ndarray:
         """Grid spacing along each axis in Angstrom."""
-        return np.linalg.norm(self.axes, axis=1) * 0.529177  # Bohr to Angstrom
+        return np.linalg.norm(self.axes, axis=1) * BOHR_TO_ANGSTROM
 
     def get_slice(self, axis: int, index: int) -> np.ndarray:
         """Get a 2D slice perpendicular to given axis."""
@@ -65,18 +61,17 @@ class DensityCube:
         Returns:
             List of (z_coordinate, 2D_array) tuples
         """
-        bohr_to_ang = 0.529177
         nz = self.shape[2]
 
         # Determine Z range based on atom positions (molecule extent)
         if self.atoms:
-            atom_z = np.array([a[3] for a in self.atoms]) * bohr_to_ang
-            z_min = atom_z.min() - 0.5  # Add 0.5 Angstrom padding
-            z_max = atom_z.max() + 0.5
+            atom_z = np.array([a[3] for a in self.atoms]) * BOHR_TO_ANGSTROM
+            z_min = atom_z.min() - MOLECULE_EXTENT_PADDING
+            z_max = atom_z.max() + MOLECULE_EXTENT_PADDING
         else:
             # Fallback to full cube extent
-            z_min = self.origin[2] * bohr_to_ang
-            z_max = (self.origin[2] + (nz - 1) * self.axes[2, 2]) * bohr_to_ang
+            z_min = self.origin[2] * BOHR_TO_ANGSTROM
+            z_max = (self.origin[2] + (nz - 1) * self.axes[2, 2]) * BOHR_TO_ANGSTROM
 
         # Generate Z coordinates for slices
         z_coords_ang = np.linspace(z_min, z_max, n_slices)
@@ -84,7 +79,7 @@ class DensityCube:
         slices = []
         for z_ang in z_coords_ang:
             # Convert to grid index
-            z_bohr = z_ang / bohr_to_ang
+            z_bohr = z_ang * ANGSTROM_TO_BOHR
             idx = int(round((z_bohr - self.origin[2]) / self.axes[2, 2]))
             idx = max(0, min(idx, nz - 1))  # Clamp to valid range
 
@@ -99,14 +94,13 @@ class DensityCube:
         Returns:
             (min_coords, max_coords) as (3,) arrays in Angstrom
         """
-        bohr_to_ang = 0.529177
         if not self.atoms:
             # Fallback to grid extent
-            min_c = self.origin * bohr_to_ang
-            max_c = (self.origin + np.array(self.shape) * np.diag(self.axes)) * bohr_to_ang
+            min_c = self.origin * BOHR_TO_ANGSTROM
+            max_c = (self.origin + np.array(self.shape) * np.diag(self.axes)) * BOHR_TO_ANGSTROM
             return min_c, max_c
 
-        coords = np.array([[a[1], a[2], a[3]] for a in self.atoms]) * bohr_to_ang
+        coords = np.array([[a[1], a[2], a[3]] for a in self.atoms]) * BOHR_TO_ANGSTROM
         return coords.min(axis=0), coords.max(axis=0)
 
     def get_density_at_point(self, x: float, y: float, z: float) -> float:
@@ -118,11 +112,10 @@ class DensityCube:
         Returns:
             Density value (in e/Bohr³)
         """
-        bohr_to_ang = 0.529177
         # Convert to Bohr
-        x_bohr = x / bohr_to_ang
-        y_bohr = y / bohr_to_ang
-        z_bohr = z / bohr_to_ang
+        x_bohr = x * ANGSTROM_TO_BOHR
+        y_bohr = y * ANGSTROM_TO_BOHR
+        z_bohr = z * ANGSTROM_TO_BOHR
 
         # Convert to grid indices
         ix = (x_bohr - self.origin[0]) / self.axes[0, 0]
@@ -194,7 +187,7 @@ def parse_cube_file(filepath: Path) -> Optional[DensityCube]:
             )
 
     except Exception as e:
-        print(f"Error parsing cube file: {e}")
+        logger.error(f"Error parsing cube file: {e}")
         return None
 
 
@@ -218,9 +211,8 @@ def calculate_promolecule_density(
     Returns:
         3D array of promolecule density
     """
-
     # Convert to Bohr
-    coords_bohr = coords / 0.529177
+    coords_bohr = coords * ANGSTROM_TO_BOHR
 
     nx, ny, nz = grid_shape
     density = np.zeros(grid_shape)
@@ -263,10 +255,9 @@ def calculate_deformation_density(
     """
     # Use atom coordinates from the cube file - these match exactly what xTB used
     # The cube file stores atoms as (Z, x, y, z) in Bohr
-    z_to_symbol = {1: 'H', 6: 'C', 7: 'N', 8: 'O', 9: 'F', 15: 'P', 16: 'S', 17: 'Cl', 35: 'Br', 53: 'I'}
-    symbols = [z_to_symbol.get(atom[0], 'C') for atom in molecular_density.atoms]
+    symbols = [Z_TO_SYMBOL.get(atom[0], 'C') for atom in molecular_density.atoms]
     # Convert from Bohr to Angstrom
-    coords = np.array([[atom[1], atom[2], atom[3]] for atom in molecular_density.atoms]) * 0.529177
+    coords = np.array([[atom[1], atom[2], atom[3]] for atom in molecular_density.atoms]) * BOHR_TO_ANGSTROM
 
     promolecule_data = calculate_promolecule_density(
         coords,
@@ -345,21 +336,19 @@ def create_density_cube_from_structure(
         coords = structure.get_cartesian_coords(align_to_principal_axes=align_to_principal_axes)
 
     # Determine grid bounds (add padding)
-    padding = 3.0  # Angstrom
-    min_coords = coords.min(axis=0) - padding
-    max_coords = coords.max(axis=0) + padding
+    min_coords = coords.min(axis=0) - GRID_PADDING
+    max_coords = coords.max(axis=0) + GRID_PADDING
 
     # Grid spacing based on resolution
-    spacing_map = {"coarse": 0.2, "medium": 0.1, "fine": 0.05}
-    spacing = spacing_map.get(resolution, 0.1)
+    spacing = GRID_SPACING.get(resolution, GRID_SPACING['medium'])
 
     # Calculate grid dimensions
     extent = max_coords - min_coords
     n_points = (extent / spacing).astype(int) + 1
 
     # Convert to Bohr
-    origin_bohr = min_coords / 0.529177
-    spacing_bohr = spacing / 0.529177
+    origin_bohr = min_coords * ANGSTROM_TO_BOHR
+    spacing_bohr = spacing * ANGSTROM_TO_BOHR
 
     axes = np.diag([spacing_bohr, spacing_bohr, spacing_bohr])
 
@@ -375,9 +364,8 @@ def create_density_cube_from_structure(
 
     # Create atoms list
     symbols = structure.get_symbols()
-    coords_bohr = coords / 0.529177
-    element_to_z = {'H': 1, 'C': 6, 'N': 7, 'O': 8, 'S': 16, 'P': 15, 'F': 9, 'Cl': 17, 'Br': 35, 'I': 53}
-    atoms = [(element_to_z.get(s, 6), *c) for s, c in zip(symbols, coords_bohr)]
+    coords_bohr = coords * ANGSTROM_TO_BOHR
+    atoms = [(SYMBOL_TO_Z.get(s, 6), *c) for s, c in zip(symbols, coords_bohr)]
 
     return DensityCube(
         origin=origin_bohr,

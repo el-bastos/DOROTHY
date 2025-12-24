@@ -19,21 +19,14 @@ from matplotlib.colors import Normalize
 from matplotlib import cm
 
 from dorothy.core.density import DensityCube
-
-# Element symbols for display
-Z_TO_SYMBOL = {1: 'H', 6: 'C', 7: 'N', 8: 'O', 9: 'F', 15: 'P', 16: 'S', 17: 'Cl', 35: 'Br', 53: 'I'}
-
-# Covalent radii (Å) for bond detection
-COVALENT_RADII = {
-    1: 0.31, 6: 0.76, 7: 0.71, 8: 0.66, 9: 0.57,
-    15: 1.07, 16: 1.05, 17: 1.02, 35: 1.20, 53: 1.39,
-}
-
-# Element colors (CPK)
-ELEMENT_COLORS = {
-    1: '#FFFFFF', 6: '#909090', 7: '#3050F8', 8: '#FF0D0D', 9: '#90E050',
-    15: '#FF8000', 16: '#FFFF30', 17: '#1FF01F', 35: '#A62929', 53: '#940094',
-}
+from dorothy.core.constants import (
+    BOHR_TO_ANGSTROM,
+    Z_TO_SYMBOL,
+    COVALENT_RADII,
+    ELEMENT_COLORS,
+    CONTOUR_LEVELS_BASE,
+    SLICE_ATOM_THICKNESS,
+)
 
 
 class Slice2DPreviewDialog(QDialog):
@@ -83,13 +76,11 @@ class Slice2DPreviewDialog(QDialog):
         self.fig.clear()
         ax = self.fig.add_subplot(111)
 
-        bohr_to_ang = 0.529177
-
         # Create coordinate arrays if origin/axes provided
         if origin is not None and axes is not None:
             nx, ny = slice_data.shape
-            x = np.linspace(origin[0], origin[0] + nx * axes[0, 0], nx) * bohr_to_ang
-            y = np.linspace(origin[1], origin[1] + ny * axes[1, 1], ny) * bohr_to_ang
+            x = np.linspace(origin[0], origin[0] + nx * axes[0, 0], nx) * BOHR_TO_ANGSTROM
+            y = np.linspace(origin[1], origin[1] + ny * axes[1, 1], ny) * BOHR_TO_ANGSTROM
             X, Y = np.meshgrid(x, y, indexing='ij')
             extent = [x.min(), x.max(), y.min(), y.max()]
         else:
@@ -125,7 +116,7 @@ class Slice2DPreviewDialog(QDialog):
             # Contour mode (original behavior)
             scale = contour_scale
             if density_type == "deformation":
-                base_levels = np.array([0.005, 0.01, 0.02, 0.04, 0.08])
+                base_levels = np.array(CONTOUR_LEVELS_BASE)
                 levels_pos = list(base_levels * scale)
                 levels_neg = list(-base_levels[::-1] * scale)
 
@@ -162,13 +153,12 @@ class Slice2DPreviewDialog(QDialog):
 
         # Draw atoms near this slice
         if atoms and origin is not None:
-            slice_thickness = 0.5  # Show atoms within 0.5 Å of slice
             for atom in atoms:
                 z_num, ax_b, ay_b, az_b = atom
-                az = az_b * bohr_to_ang
-                if abs(az - z_coord) < slice_thickness:
-                    ax_a = ax_b * bohr_to_ang
-                    ay_a = ay_b * bohr_to_ang
+                az = az_b * BOHR_TO_ANGSTROM
+                if abs(az - z_coord) < SLICE_ATOM_THICKNESS:
+                    ax_a = ax_b * BOHR_TO_ANGSTROM
+                    ay_a = ay_b * BOHR_TO_ANGSTROM
                     color = ELEMENT_COLORS.get(z_num, '#808080')
                     size = 100 if z_num == 1 else 200
                     ax.scatter([ax_a], [ay_a], c=color, s=size, edgecolors='black',
@@ -334,9 +324,9 @@ class SliceExplorerCanvas(FigureCanvas):
             return
 
         # Get grid extent in Angstrom
-        origin = self._density_cube.origin * 0.529177
+        origin = self._density_cube.origin * BOHR_TO_ANGSTROM
         nx, ny, nz = self._density_cube.shape
-        axes = self._density_cube.axes * 0.529177
+        axes = self._density_cube.axes * BOHR_TO_ANGSTROM
 
         x_extent = nx * axes[0, 0]
         y_extent = ny * axes[1, 1]
@@ -590,16 +580,16 @@ class SliceExplorerCanvas(FigureCanvas):
 
         for i in range(n_atoms):
             z1, x1, y1, z1_coord = atoms[i]
-            x1 *= 0.529177
-            y1 *= 0.529177
-            z1_coord *= 0.529177
+            x1 *= BOHR_TO_ANGSTROM
+            y1 *= BOHR_TO_ANGSTROM
+            z1_coord *= BOHR_TO_ANGSTROM
             r1 = COVALENT_RADII.get(z1, 1.5)
 
             for j in range(i + 1, n_atoms):
                 z2, x2, y2, z2_coord = atoms[j]
-                x2 *= 0.529177
-                y2 *= 0.529177
-                z2_coord *= 0.529177
+                x2 *= BOHR_TO_ANGSTROM
+                y2 *= BOHR_TO_ANGSTROM
+                z2_coord *= BOHR_TO_ANGSTROM
                 r2 = COVALENT_RADII.get(z2, 1.5)
 
                 dist = np.sqrt((x2 - x1)**2 + (y2 - y1)**2 + (z2_coord - z1_coord)**2)
@@ -667,9 +657,9 @@ class SliceExplorerCanvas(FigureCanvas):
         for idx, atom in enumerate(self._density_cube.atoms):
             z_num, ax, ay, az = atom
             # Convert from Bohr to Angstrom
-            x = ax * 0.529177
-            y = ay * 0.529177
-            z = az * 0.529177
+            x = ax * BOHR_TO_ANGSTROM
+            y = ay * BOHR_TO_ANGSTROM
+            z = az * BOHR_TO_ANGSTROM
 
             self._atom_positions_3d.append((x, y, z))
 
@@ -803,9 +793,8 @@ class SliceExplorerCanvas(FigureCanvas):
         # Show density range info
         # Density is in e/Bohr³, convert to e/Å³ for display
         data = self._density_cube.data
-        bohr_to_ang = 0.529177
         # Convert density from e/Bohr³ to e/Å³ (multiply by Bohr³/Å³)
-        density_ang = data * (1.0 / bohr_to_ang**3)
+        density_ang = data * (1.0 / BOHR_TO_ANGSTROM**3)
         # Calculate volume element for total electron count
         dV = abs(np.linalg.det(self._density_cube.axes))  # Volume in Bohr³
         total_electrons = data.sum() * dV
@@ -1031,12 +1020,11 @@ class SliceExplorerCanvas(FigureCanvas):
         if atom1_idx >= len(atoms) or atom2_idx >= len(atoms):
             return None
 
-        bohr_to_ang = 0.529177
         z1, x1, y1, z1c = atoms[atom1_idx]
         z2, x2, y2, z2c = atoms[atom2_idx]
 
-        x1, y1, z1c = x1 * bohr_to_ang, y1 * bohr_to_ang, z1c * bohr_to_ang
-        x2, y2, z2c = x2 * bohr_to_ang, y2 * bohr_to_ang, z2c * bohr_to_ang
+        x1, y1, z1c = x1 * BOHR_TO_ANGSTROM, y1 * BOHR_TO_ANGSTROM, z1c * BOHR_TO_ANGSTROM
+        x2, y2, z2c = x2 * BOHR_TO_ANGSTROM, y2 * BOHR_TO_ANGSTROM, z2c * BOHR_TO_ANGSTROM
 
         length = np.sqrt((x2-x1)**2 + (y2-y1)**2 + (z2c-z1c)**2)
         mid_x, mid_y, mid_z = (x1+x2)/2, (y1+y2)/2, (z1c+z2c)/2

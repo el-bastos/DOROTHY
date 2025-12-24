@@ -12,15 +12,21 @@ from dataclasses import dataclass
 from typing import Optional
 
 from dorothy.core.density import DensityCube
+from dorothy.core.constants import (
+    CONTOUR_LEVELS_PROMOLECULE,
+    CONTOUR_LEVELS_DEFORMATION,
+    DEFAULT_N_SLICES,
+    PAGE_SIZE_A5,
+)
 
 
 @dataclass
 class ContourSettings:
     """Settings for contour generation."""
-    n_slices: int = 15
+    n_slices: int = DEFAULT_N_SLICES
     color_mode: str = "bw"  # "bw" or "color"
     n_contour_levels: int = 10
-    page_size: tuple[float, float] = (5.83, 8.27)  # A5 in inches
+    page_size: tuple[float, float] = PAGE_SIZE_A5
     detail_level: str = "simple"  # "simple" or "advanced"
     # simple: fewer contours, auto-scaled per slice (easier for students)
     # advanced: fixed contour levels across all slices, shows π-bonds
@@ -53,8 +59,7 @@ def generate_promolecule_contours(
     # Determine contour levels based on detail level
     if settings.detail_level == "advanced":
         # Fixed levels across all slices - capped to show bonding regions
-        # These levels work well for normalized densities
-        levels = [0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2, 0.25]
+        levels = CONTOUR_LEVELS_PROMOLECULE
     else:
         # Simple mode: auto-scaled based on data percentiles
         all_data = np.concatenate([s[1].flatten() for s in slices])
@@ -136,9 +141,8 @@ def generate_deformation_contours(
     # Determine contour levels based on detail level
     if settings.detail_level == "advanced":
         # Fixed levels - these show both σ and π bonding features
-        # Lower thresholds capture diffuse π-density above/below molecular plane
-        positive_levels = [0.01, 0.02, 0.04, 0.08, 0.12]
-        negative_levels = [-0.12, -0.08, -0.04, -0.02, -0.01]
+        positive_levels = CONTOUR_LEVELS_DEFORMATION
+        negative_levels = [-l for l in reversed(CONTOUR_LEVELS_DEFORMATION)]
     else:
         # Simple mode: auto-scaled based on data, fewer levels
         all_data = np.concatenate([s[1].flatten() for s in slices])

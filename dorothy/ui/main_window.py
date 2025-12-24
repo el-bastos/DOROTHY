@@ -302,9 +302,9 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(800, 600)
 
         self.searcher = CODSearch()  # Single instance to cache local molecules
-        self.search_worker = None
-        self.generation_worker = None
-        self.xtb_density_worker = None
+        self.search_worker: SearchWorker | None = None
+        self.generation_worker: GenerationWorker | None = None
+        self.xtb_density_worker: XtbDensityWorker | None = None
         self.current_results = []
         self.selected_molecule: MoleculeResult | None = None
         self.selected_structure: MoleculeStructure | None = None
@@ -767,6 +767,14 @@ class MainWindow(QMainWindow):
 
         return screen
 
+    def _cleanup_worker(self, worker: QThread | None) -> None:
+        """Safely cleanup a worker thread before creating a new one."""
+        if worker is not None and worker.isRunning():
+            worker.quit()
+            worker.wait(1000)  # Wait up to 1 second
+            if worker.isRunning():
+                worker.terminate()
+
     def _on_search(self):
         """Handle search button click."""
         search_text = self.search_input.text().strip()
@@ -777,6 +785,9 @@ class MainWindow(QMainWindow):
         self.search_button.setEnabled(False)
         self.search_input.setEnabled(False)
         self.status_label.setText(self.tr("Searching..."))
+
+        # Cleanup previous worker if running
+        self._cleanup_worker(self.search_worker)
 
         # Run search in background thread
         self.search_worker = SearchWorker(self.searcher, search_text)
@@ -1049,6 +1060,9 @@ class MainWindow(QMainWindow):
         self.progress_label.setText(self.tr("Starting..."))
         self.stacked_widget.setCurrentWidget(self.processing_screen)
 
+        # Cleanup previous worker if running
+        self._cleanup_worker(self.generation_worker)
+
         # Run generation in background
         self.generation_worker = GenerationWorker(
             self.selected_structure, output_path, settings
@@ -1129,6 +1143,9 @@ class MainWindow(QMainWindow):
 
         # Show progress indicator
         self.mol_info_label.setText("Calculating density...")
+
+        # Cleanup previous worker if running
+        self._cleanup_worker(self.xtb_density_worker)
 
         # Get current plane definition if any
         plane_def = getattr(self, '_current_plane_definition', None)
