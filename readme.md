@@ -209,7 +209,7 @@ In a teaching context, this reversal is powerful: students see the electron dens
 
 ## License
 
-MIT (application code)
+GPL-3.0 — see [LICENSE](LICENSE)
 
 xTB is LGPL-3.0 (downloaded separately, not bundled)
 
