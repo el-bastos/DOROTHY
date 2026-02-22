@@ -56,22 +56,20 @@ class DensityCube:
 
     def get_z_slices(self, n_slices: int) -> list[tuple[float, np.ndarray]]:
         """
-        Get evenly spaced slices along z-axis, distributed over molecule extent.
+        Get evenly spaced slices along z-axis, covering the full density grid.
+
+        Uses the full grid extent so slices span from empty space through
+        the molecule and back to empty space — showing the complete electron
+        density cloud without cutting it off.
 
         Returns:
             List of (z_coordinate, 2D_array) tuples
         """
         nz = self.shape[2]
 
-        # Determine Z range based on atom positions (molecule extent)
-        if self.atoms:
-            atom_z = np.array([a[3] for a in self.atoms]) * BOHR_TO_ANGSTROM
-            z_min = atom_z.min() - MOLECULE_EXTENT_PADDING
-            z_max = atom_z.max() + MOLECULE_EXTENT_PADDING
-        else:
-            # Fallback to full cube extent
-            z_min = self.origin[2] * BOHR_TO_ANGSTROM
-            z_max = (self.origin[2] + (nz - 1) * self.axes[2, 2]) * BOHR_TO_ANGSTROM
+        # Use full grid extent so the density fades in from zero and back out
+        z_min = self.origin[2] * BOHR_TO_ANGSTROM
+        z_max = (self.origin[2] + (nz - 1) * self.axes[2, 2]) * BOHR_TO_ANGSTROM
 
         # Generate Z coordinates for slices
         z_coords_ang = np.linspace(z_min, z_max, n_slices)
@@ -301,7 +299,7 @@ def calculate_deformation_density(
 
 def create_density_cube_from_structure(
     structure: MoleculeStructure,
-    resolution: str = "medium",
+    resolution: str | float = "medium",
     align_to_principal_axes: bool = True,
     plane_definition=None,
 ) -> DensityCube:
@@ -339,8 +337,11 @@ def create_density_cube_from_structure(
     min_coords = coords.min(axis=0) - GRID_PADDING
     max_coords = coords.max(axis=0) + GRID_PADDING
 
-    # Grid spacing based on resolution
-    spacing = GRID_SPACING.get(resolution, GRID_SPACING['medium'])
+    # Grid spacing based on resolution (accepts string or numeric Å value)
+    if isinstance(resolution, (int, float)):
+        spacing = float(resolution)
+    else:
+        spacing = GRID_SPACING.get(resolution, GRID_SPACING['medium'])
 
     # Calculate grid dimensions
     extent = max_coords - min_coords

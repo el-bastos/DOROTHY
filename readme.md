@@ -6,22 +6,25 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 
 ## Current Status
 
-**Version:** 0.5.1 (Development)
+**Version:** 0.6.0 (Development)
 
 ### What's Working
 
-- **PyQt6 Desktop Application** - Native UI with 5 screens
+- **PyQt6 Desktop Application** - Native UI with Fusion style, design system
 - **Molecule Search** - Local CIF files + COD online (with fallback)
 - **CIF Parser** - Extracts atomic coordinates, cell parameters, space groups
 - **2D Molecule Viewer** - Bond detection, CPK coloring, interactive atom selection, 3D rotation
 - **3D Slice Explorer** - Interactive 3D preview with zoom, bonds, and custom orientation
 - **Interactive Plane Selection** - Click 4 atoms to define custom slicing plane (3 for plane + 1 for orientation)
+- **Measurement Tool** - Click atoms to measure distances (2), angles (3), and dihedrals (4)
 - **Auto xTB on 3D View** - Automatically calculates deformation density when switching to 3D
 - **Generation Pipeline** - Promolecule density calculation, contour slicing, PDF export
 - **Principal Axes Alignment** - Molecules auto-rotated for optimal slicing orientation
 - **xTB Integration** - Deformation density via xTB (Homebrew/conda), with install dialog
 - **Heatmap Mode** - Color gradient rendering for screen visualization (vs contours for print)
-- **Detail Level Settings** - Simple mode (beginners) vs Advanced mode (shows π-bonds)
+- **Detail Level Combo** - Fast (0.20 Å) / Good (0.10 Å) / Best (0.05 Å) integrated in toolbar
+- **Planes Toggle** - Show/hide slice plane rectangles to view contours in isolation
+- **Help Dialog** - Comprehensive "What is Dorothy?" modal with scientific background and references
 - **Fixed Contour Levels** - Advanced mode uses consistent levels across slices for comparability
 - **i18n Ready** - Qt translation system in place (English only for now)
 
@@ -78,7 +81,8 @@ Dorothy/
 │   ├── ui/
 │   │   ├── main_window.py      # Main application window
 │   │   ├── molecule_viewer.py  # 2D structure viewer
-│   │   └── slice_explorer.py   # 3D interactive slice preview
+│   │   ├── slice_explorer.py   # 3D interactive slice preview
+│   │   └── styles.py           # Design system (colors, fonts, widget styles)
 │   └── resources/
 │       └── translations/       # i18n files
 ├── tests/                      # pytest test suite
@@ -183,7 +187,23 @@ When using custom plane selection (4 atoms), the molecule is rotated so the user
 
 Dorothy Hodgkin (1910–1994) pioneered X-ray crystallography, determining structures of penicillin, vitamin B12, and insulin. She drew electron density contours on transparent Perspex sheets and stacked them to visualize molecular structure.
 
-This tool gives students the endpoint of her process—density maps—and asks them to do what she did: interpret the contours as atoms and deduce chemical bonds.
+### Hodgkin's workflow vs Dorothy's workflow
+
+Hodgkin's original method ran in one direction:
+
+> Crystal → X-ray diffraction → phase problem → electron density map → atom positions
+
+She began with a physical crystal, collected a diffraction pattern, solved the phase problem, and used the resulting electron density to locate atoms she did not yet know.
+
+Dorothy (the application) runs in the **opposite** direction:
+
+> Atom positions (from CIF) → computed electron density → visualization
+
+We already know where the atoms are — that information was determined by crystallographers and deposited in the COD. Starting from those known positions, Dorothy computes the electron density (either as a promolecule superposition or via xTB quantum chemistry) and visualizes it.
+
+Neither density shown by Dorothy comes from an X-ray experiment directly. What comes from the experiment are the atom positions in the CIF file. The densities are computed from those positions, making them theoretical reconstructions of what a crystallographer would have observed in an experimental density map.
+
+In a teaching context, this reversal is powerful: students see the electron density that Hodgkin would have painstakingly reconstructed from diffraction data, but without needing a crystal, an X-ray source, or months of hand calculation.
 
 ---
 
@@ -195,11 +215,23 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 
 ---
 
-*December 2024*
+*February 2025*
 
 ---
 
 ## Changelog
+
+### v0.6.0 (February 2025)
+- **WYSIWYG Viewer**: 3D viewer controls now match PDF export settings — what you see is what you get
+- **Detail Level Combo**: Replaced standalone resolution spinbox with Fast/Good/Best dropdown integrated into the toolbar
+- **Measurement Tool**: Click atoms to measure distances (2 atoms), angles (3 atoms), and dihedral angles (4 atoms) with gold overlay annotations
+- **Planes Toggle**: New checkbox to show/hide slice plane rectangles while keeping contour lines visible
+- **Help Dialog**: Comprehensive "What is Dorothy?" modal covering the science, workflow, Dorothy Hodgkin's legacy, and full academic references
+- **Workflow Explanation**: Help dialog explains how Dorothy reverses Hodgkin's original crystallographic workflow (structure→density vs density→structure)
+- **Design System**: Centralized styles module with Fusion rendering for consistent cross-platform appearance
+- **Full grid slicing**: Z-slices now span the full density grid so density fades in from zero and back out
+- **Flexible resolution**: `create_density_cube_from_structure` accepts both string presets and numeric Å values
+- **Bond density labels**: Clearer bond annotation format (`density: 0.123` instead of `ρ=0.123`)
 
 ### v0.5.1 (December 2024)
 - **Centralized constants**: New `constants.py` module for physical constants, element data, and settings

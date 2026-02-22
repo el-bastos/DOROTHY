@@ -9,7 +9,7 @@ import numpy as np
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSlider, QLabel,
     QPushButton, QComboBox, QCheckBox, QSizePolicy, QButtonGroup,
-    QFrame, QDialog, QDialogButtonBox
+    QFrame, QDialog, QDialogButtonBox, QSpinBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -101,7 +101,7 @@ class Slice2DPreviewDialog(QDialog):
             if density_type == "deformation":
                 max_abs = max(abs(slice_data.min()), abs(slice_data.max()))
                 vmin, vmax = -max_abs, max_abs
-                info_text = f"Deformation density at z = {z_coord:.2f} Å\nRed = accumulation | Blue = depletion"
+                info_text = f"Deformation density at z = {z_coord:.2f} Å\nBlue = accumulation (+) | Red = depletion (−)"
             else:
                 vmin, vmax = slice_data.min(), slice_data.max()
                 info_text = f"Promolecule density at z = {z_coord:.2f} Å"
@@ -128,13 +128,13 @@ class Slice2DPreviewDialog(QDialog):
                 levels_pos = list(base_levels * scale)
                 levels_neg = list(-base_levels[::-1] * scale)
 
-                # Draw positive contours
+                # Draw positive contours (blue = accumulation)
                 valid_pos = [l for l in levels_pos if l < slice_data.max()]
                 if valid_pos:
-                    color = 'black' if color_mode == 'bw' else '#e05a2b'
+                    color = 'black' if color_mode == 'bw' else '#2563eb'
                     ax.contour(X, Y, slice_data, levels=valid_pos, colors=color, linewidths=1.0)
 
-                # Draw negative contours
+                # Draw negative contours (red = depletion)
                 valid_neg = [l for l in levels_neg if l > slice_data.min()]
                 if valid_neg:
                     color = '#666666' if color_mode == 'bw' else '#dc2626'
@@ -221,6 +221,9 @@ class SliceExplorerCanvas(FigureCanvas):
         # Show only highlighted slice (hide others)
         self._show_only_highlighted = False
 
+        # Show slice planes (semi-transparent rectangles behind contours)
+        self._show_planes = True
+
         # Density hover display
         self._show_density_on_hover = False
         self._density_text = None
@@ -232,7 +235,10 @@ class SliceExplorerCanvas(FigureCanvas):
         self._render_mode = "contour"
 
         # Colormap for heatmap mode
-        self._heatmap_colormap = "RdYlBu_r"  # Red (high) -> Blue (low)
+        self._heatmap_colormap = "RdYlBu"  # Blue (positive/high) -> Red (negative/low)
+
+        # Color legend for deformation mode
+        self._color_legend_texts: list = []
 
         # Bond information storage for click detection
         self._bonds: list[tuple[int, int, float]] = []  # (atom1_idx, atom2_idx, length)
@@ -384,9 +390,10 @@ class SliceExplorerCanvas(FigureCanvas):
         ylim = (y.min() - padding, y.max() + padding)
         zlim = (min(z_coords) - padding, max(z_coords) + padding)
 
-        # Draw bonds and atoms
+        # Draw bonds, atoms, and measurements
         self._draw_bonds()
         self._draw_atoms()
+        self._draw_measurements()
 
         # Store base limits for zoom
         self._base_limits = (xlim, ylim, zlim)
@@ -397,8 +404,36 @@ class SliceExplorerCanvas(FigureCanvas):
         self.ax.set_zlim(zlim)
         self._apply_zoom()
 
+        # Draw color legend for deformation in color mode
+        self._update_color_legend()
+
         self.fig.tight_layout()
         self.draw()
+
+    def _update_color_legend(self):
+        """Show or hide the blue/red color legend for deformation density."""
+        # Remove old legend texts
+        for txt in self._color_legend_texts:
+            txt.remove()
+        self._color_legend_texts.clear()
+
+        show = (self._density_type == 'deformation'
+                and self._color_mode == 'color'
+                and self._render_mode != 'heatmap')
+        if not show:
+            return
+
+        props = dict(fontsize=10, fontfamily=S.FONT_FAMILY,
+                     verticalalignment='center')
+        t1 = self.fig.text(0.01, 0.04, '\u25CF',
+                           color='#2563eb', **props)
+        t2 = self.fig.text(0.03, 0.04, 'accumulation (+)',
+                           color='#333333', **props)
+        t3 = self.fig.text(0.22, 0.04, '\u25CF',
+                           color='#dc2626', **props)
+        t4 = self.fig.text(0.24, 0.04, 'depletion (\u2212)',
+                           color='#333333', **props)
+        self._color_legend_texts = [t1, t2, t3, t4]
 
     def _draw_z_slices(self, slices, origin, x_extent, y_extent, levels_pos, levels_neg):
         """Draw slices along Z-axis (original behavior)."""
@@ -436,17 +471,26 @@ class SliceExplorerCanvas(FigureCanvas):
                     levels_pos, levels_neg,
                     alpha, is_highlighted
                 )
-            else:
+            elif self._show_planes:
                 self._draw_slice_plane(X, Y, z_coord, slice_data, alpha, is_highlighted)
 
     def _draw_slice_contours(self, X, Y, Z, slice_data, z_coord,
                              levels_pos, levels_neg, alpha, is_highlighted):
         """Draw contour lines on a slice at given z-coordinate."""
-        # First draw the plane behind the contours
-        self._draw_slice_plane(X, Y, z_coord, slice_data, alpha * 0.3, is_highlighted)
+        # Draw the plane behind the contours (if enabled)
+        if self._show_planes:
+            self._draw_slice_plane(X, Y, z_coord, slice_data, alpha * 0.3, is_highlighted)
 
-        # For 3D contour with zdir='z', we pass X, Y grids and data directly
-        # The data shape should match (nx, ny) where X is (nx, ny) and Y is (nx, ny)
+        # Choose positive contour color: blue for deformation, orange for promolecule/molecular
+        if self._color_mode == 'bw':
+            pos_color = '#000000'
+            neg_color = '#666666'
+        elif self._density_type == 'deformation':
+            pos_color = '#2563eb'  # blue = accumulation
+            neg_color = '#dc2626'  # red = depletion
+        else:
+            pos_color = '#e05a2b'  # orange accent for promolecule/molecular
+            neg_color = '#dc2626'
 
         # Draw positive contours
         if levels_pos and len(levels_pos) > 0:
@@ -458,7 +502,7 @@ class SliceExplorerCanvas(FigureCanvas):
                         levels=valid_levels,
                         zdir='z',
                         offset=z_coord,
-                        colors='#000000' if self._color_mode == 'bw' else '#e05a2b',
+                        colors=pos_color,
                         linewidths=2.0 if is_highlighted else 0.6,
                         alpha=1.0 if is_highlighted else 0.4
                     )
@@ -475,7 +519,7 @@ class SliceExplorerCanvas(FigureCanvas):
                         levels=valid_levels,
                         zdir='z',
                         offset=z_coord,
-                        colors='#666666' if self._color_mode == 'bw' else '#dc2626',
+                        colors=neg_color,
                         linestyles='dashed',
                         linewidths=2.0 if is_highlighted else 0.6,
                         alpha=1.0 if is_highlighted else 0.4
@@ -497,9 +541,14 @@ class SliceExplorerCanvas(FigureCanvas):
              (x_min, y_max, z_coord)]
         ]
 
-        # Choose color based on density
+        # Choose color based on density type and color mode
         if is_highlighted:
-            color = '#e05a2b' if self._color_mode == 'color' else '#666666'
+            if self._color_mode != 'color':
+                color = '#666666'
+            elif self._density_type == 'deformation':
+                color = '#8b5cf6'  # purple — neutral between blue(+) and red(-)
+            else:
+                color = '#e05a2b'  # orange accent
             face_alpha = 0.3
         else:
             color = '#cccccc'
@@ -626,7 +675,7 @@ class SliceExplorerCanvas(FigureCanvas):
                         mid_x, mid_y, mid_z = (x1+x2)/2, (y1+y2)/2, (z1_coord+z2_coord)/2
                         if self._density_cube:
                             density = self._density_cube.get_density_at_point(mid_x, mid_y, mid_z)
-                            label = f"{dist:.2f}Å\nρ={density:.3f}"
+                            label = f"{dist:.2f} Å\ndensity: {density:.3f}"
                             self.ax.text(mid_x, mid_y, mid_z + 0.3, label,
                                         fontsize=8, ha='center', color='#FF6600',
                                         fontweight='bold', zorder=20)
@@ -712,8 +761,8 @@ class SliceExplorerCanvas(FigureCanvas):
 
         from mpl_toolkits.mplot3d import proj3d
 
-        # Check for atom click first (if pick mode enabled)
-        if self._pick_enabled and self._atom_positions_3d:
+        # Check for atom click (measurement mode or pick mode)
+        if (self._measurement_mode or self._pick_enabled) and self._atom_positions_3d:
             min_dist = float('inf')
             closest_idx = -1
 
@@ -726,6 +775,9 @@ class SliceExplorerCanvas(FigureCanvas):
                     closest_idx = idx
 
             if closest_idx >= 0 and min_dist < 30:
+                if self._measurement_mode:
+                    self.add_measurement_point(closest_idx)
+                    return
                 self.atom_picked.emit(closest_idx)
                 return
 
@@ -980,6 +1032,12 @@ class SliceExplorerCanvas(FigureCanvas):
         if self._density_cube:
             self._draw_slices()
 
+    def set_show_planes(self, show: bool):
+        """Toggle slice plane visibility (the semi-transparent rectangles)."""
+        self._show_planes = show
+        if self._density_cube:
+            self._draw_slices()
+
     def get_current_slice_data(self) -> tuple[np.ndarray, float] | None:
         """Get the data for the currently highlighted slice.
 
@@ -1048,9 +1106,117 @@ class SliceExplorerCanvas(FigureCanvas):
             'atom2_z': z2,
         }
 
+    # ----- Measurement mode -----
+
+    def set_measurement_mode(self, enabled: bool):
+        """Toggle measurement mode for distance/angle/dihedral."""
+        self._measurement_mode = enabled
+        if not enabled:
+            self._measurement_points = []
+        if self._density_cube:
+            self._draw_slices()
+
+    def add_measurement_point(self, atom_idx: int):
+        """Add or remove an atom from the measurement set."""
+        if atom_idx in self._measurement_points:
+            self._measurement_points.remove(atom_idx)
+        else:
+            if len(self._measurement_points) >= 4:
+                self._measurement_points = []
+            self._measurement_points.append(atom_idx)
+        if self._density_cube:
+            self._draw_slices()
+
+    def _draw_measurements(self):
+        """Draw measurement annotations (distance, angle, dihedral)."""
+        if not self._measurement_mode or not self._measurement_points:
+            return
+        if not self._atom_positions_3d:
+            return
+
+        points = []
+        for idx in self._measurement_points:
+            if idx < len(self._atom_positions_3d):
+                points.append(self._atom_positions_3d[idx])
+
+        if len(points) < 2:
+            # Just highlight the single selected atom
+            if len(points) == 1:
+                p = points[0]
+                self.ax.scatter([p[0]], [p[1]], [p[2]],
+                               c='#FFD700', s=120, edgecolors='#FF8C00',
+                               linewidths=2, alpha=0.9, zorder=20)
+            return
+
+        # Draw measurement lines (gold)
+        for i in range(len(points) - 1):
+            p1, p2 = points[i], points[i + 1]
+            self.ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
+                         color='#FFD700', linewidth=3, alpha=0.9, zorder=15)
+
+        # Highlight measurement atoms
+        for p in points:
+            self.ax.scatter([p[0]], [p[1]], [p[2]],
+                           c='#FFD700', s=120, edgecolors='#FF8C00',
+                           linewidths=2, alpha=0.9, zorder=20)
+
+        n = len(points)
+        label_props = dict(fontsize=11, ha='center', color='#FF8C00',
+                           fontweight='bold', zorder=25,
+                           bbox=dict(boxstyle='round,pad=0.3',
+                                     facecolor='white', alpha=0.85))
+
+        if n == 2:
+            dist = self._calc_distance(points[0], points[1])
+            mid = [(points[0][k] + points[1][k]) / 2 for k in range(3)]
+            self.ax.text(mid[0], mid[1], mid[2] + 0.4,
+                         f"{dist:.3f} \u00c5", **label_props)
+        elif n == 3:
+            angle = self._calc_angle(points[0], points[1], points[2])
+            vertex = points[1]
+            self.ax.text(vertex[0], vertex[1], vertex[2] + 0.4,
+                         f"{angle:.1f}\u00b0", **label_props)
+        elif n >= 4:
+            dihedral = self._calc_dihedral(points[0], points[1], points[2], points[3])
+            mid = [(points[1][k] + points[2][k]) / 2 for k in range(3)]
+            self.ax.text(mid[0], mid[1], mid[2] + 0.4,
+                         f"{dihedral:.1f}\u00b0", **label_props)
+
+    @staticmethod
+    def _calc_distance(p1, p2):
+        return np.linalg.norm(np.array(p1) - np.array(p2))
+
+    @staticmethod
+    def _calc_angle(p1, p2, p3):
+        v1 = np.array(p1) - np.array(p2)
+        v2 = np.array(p3) - np.array(p2)
+        cos_a = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
+        return np.degrees(np.arccos(np.clip(cos_a, -1.0, 1.0)))
+
+    @staticmethod
+    def _calc_dihedral(p1, p2, p3, p4):
+        b1 = np.array(p2) - np.array(p1)
+        b2 = np.array(p3) - np.array(p2)
+        b3 = np.array(p4) - np.array(p3)
+        n1 = np.cross(b1, b2)
+        n2 = np.cross(b2, b3)
+        norm1 = np.linalg.norm(n1)
+        norm2 = np.linalg.norm(n2)
+        if norm1 < 1e-10 or norm2 < 1e-10:
+            return 0.0
+        n1 /= norm1
+        n2 /= norm2
+        b2_hat = b2 / np.linalg.norm(b2)
+        m1 = np.cross(n1, b2_hat)
+        x = np.dot(n1, n2)
+        y = np.dot(m1, n2)
+        return np.degrees(np.arctan2(y, x))
+
 
 class SliceExplorer(QWidget):
     """Interactive 3D Slice Explorer widget."""
+
+    export_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1169,6 +1335,14 @@ class SliceExplorer(QWidget):
         self.bonds_check.stateChanged.connect(self._on_bonds_toggled)
         row1.addWidget(self.bonds_check)
 
+        self.planes_check = QCheckBox("Planes")
+        self.planes_check.setFont(_font())
+        self.planes_check.setStyleSheet(S.checkbox_style())
+        self.planes_check.setChecked(True)
+        self.planes_check.setToolTip("Show/hide slice planes (keep contours only)")
+        self.planes_check.stateChanged.connect(self._on_planes_toggled)
+        row1.addWidget(self.planes_check)
+
         self.single_slice_check = QCheckBox("Single")
         self.single_slice_check.setFont(_font())
         self.single_slice_check.setStyleSheet(S.checkbox_style())
@@ -1220,6 +1394,30 @@ class SliceExplorer(QWidget):
         # === ROW 2: Navigation Controls ===
         row2 = QHBoxLayout()
         row2.setSpacing(20)
+
+        # Slices count
+        slices_count_group = QHBoxLayout()
+        slices_count_group.setSpacing(4)
+        slices_count_label = QLabel("Slices:")
+        slices_count_label.setFont(_font(bold=True))
+        slices_count_label.setStyleSheet(S.label_title())
+        slices_count_label.setToolTip("Total number of slices through the density")
+        slices_count_group.addWidget(slices_count_label)
+        self.slices_spinbox = QSpinBox()
+        self.slices_spinbox.setFont(_font())
+        self.slices_spinbox.setStyleSheet(S.spinbox_style())
+        self.slices_spinbox.setRange(5, 50)
+        self.slices_spinbox.setValue(15)
+        self.slices_spinbox.setToolTip("Number of slices (re-slices existing density, no recompute)")
+        self.slices_spinbox.valueChanged.connect(self._on_n_slices_changed)
+        slices_count_group.addWidget(self.slices_spinbox)
+        row2.addLayout(slices_count_group)
+
+        # Separator
+        sep_slices = QFrame()
+        sep_slices.setFrameShape(QFrame.Shape.VLine)
+        sep_slices.setFrameShadow(QFrame.Shadow.Sunken)
+        row2.addWidget(sep_slices)
 
         # Slice navigation
         slice_group = QHBoxLayout()
@@ -1331,6 +1529,15 @@ class SliceExplorer(QWidget):
         sep4.setFrameShadow(QFrame.Shadow.Sunken)
         row2.addWidget(sep4)
 
+        # Measure button
+        self.measure_btn = QPushButton("Measure")
+        self.measure_btn.setFont(_font())
+        self.measure_btn.setStyleSheet(S.btn_toggle())
+        self.measure_btn.setCheckable(True)
+        self.measure_btn.setToolTip("Click atoms to measure: 2 = distance, 3 = angle, 4 = dihedral")
+        self.measure_btn.clicked.connect(self._on_measure_toggled)
+        row2.addWidget(self.measure_btn)
+
         # View 2D button
         self.view_2d_btn = QPushButton("View 2D")
         self.view_2d_btn.setFont(_font())
@@ -1348,6 +1555,20 @@ class SliceExplorer(QWidget):
         self.animate_btn.clicked.connect(self._toggle_animation)
         row2.addWidget(self.animate_btn)
 
+        # Separator
+        sep_export = QFrame()
+        sep_export.setFrameShape(QFrame.Shape.VLine)
+        sep_export.setFrameShadow(QFrame.Shadow.Sunken)
+        row2.addWidget(sep_export)
+
+        # Export PDF button
+        self.export_pdf_btn = QPushButton("Export PDF")
+        self.export_pdf_btn.setFont(_font(bold=True))
+        self.export_pdf_btn.setStyleSheet(S.btn_primary())
+        self.export_pdf_btn.setToolTip("Export current view as PDF slices for printing on transparencies")
+        self.export_pdf_btn.clicked.connect(self._on_export_clicked)
+        row2.addWidget(self.export_pdf_btn)
+
         layout.addLayout(row2)
 
     def set_density_cubes(self, promolecule: DensityCube | None = None,
@@ -1358,6 +1579,11 @@ class SliceExplorer(QWidget):
         self._promolecule_cube = promolecule
         self._molecular_cube = molecular
         self._deformation_cube = deformation
+
+        # Sync slices spinbox (without triggering re-slice)
+        self.slices_spinbox.blockSignals(True)
+        self.slices_spinbox.setValue(n_slices)
+        self.slices_spinbox.blockSignals(False)
 
         # Update slice slider
         self.slice_slider.setMaximum(n_slices - 1)
@@ -1382,6 +1608,21 @@ class SliceExplorer(QWidget):
             self.canvas.set_density_cube(deformation, "deformation")
 
         self._update_slice_label()
+
+    def get_n_slices(self) -> int:
+        """Get the current number of slices."""
+        return self.slices_spinbox.value()
+
+    def _on_n_slices_changed(self, n: int):
+        """Re-slice existing density cubes with new slice count (no recompute)."""
+        self.canvas.set_n_slices(n)
+        self.slice_slider.setMaximum(n - 1)
+        self.slice_slider.setValue(n // 2)
+        self._update_slice_label()
+
+    def _on_export_clicked(self):
+        """Emit signal for PDF export."""
+        self.export_requested.emit()
 
     def _on_density_type_changed(self, index: int):
         """Handle density type selection change."""
@@ -1432,9 +1673,17 @@ class SliceExplorer(QWidget):
         """Handle bonds checkbox toggle."""
         self.canvas.set_show_bonds(state == Qt.CheckState.Checked.value)
 
+    def _on_planes_toggled(self, state: int):
+        """Handle planes checkbox toggle."""
+        self.canvas.set_show_planes(state == Qt.CheckState.Checked.value)
+
     def _on_single_slice_toggled(self, state: int):
         """Handle single slice checkbox toggle."""
         self.canvas.set_show_only_highlighted(state == Qt.CheckState.Checked.value)
+
+    def _on_measure_toggled(self, checked: bool):
+        """Toggle measurement mode."""
+        self.canvas.set_measurement_mode(checked)
 
     def _update_slice_label(self):
         """Update the slice number label with Z-coordinate."""

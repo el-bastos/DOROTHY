@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QComboBox,
     QSpinBox,
+
     QCheckBox,
     QGroupBox,
     QProgressBar,
@@ -32,7 +33,6 @@ from PyQt6.QtCore import QUrl
 
 from dorothy.core.cod_search import CODSearch, MoleculeResult
 from dorothy.core.cif_parser import MoleculeStructure
-from dorothy.core.generator import GenerationPipeline, GenerationSettings, GenerationResult
 from dorothy.core.xtb_manager import is_xtb_installed, download_xtb, get_download_url, get_xtb_install_instructions
 from dorothy.core.density import create_density_cube_from_structure
 from dorothy.ui.molecule_viewer import MoleculeViewer
@@ -51,7 +51,7 @@ def _font(size: int = S.SIZE_BODY, bold: bool = False) -> QFont:
 
 
 # =============================================================================
-# Worker threads (unchanged logic)
+# Worker threads
 # =============================================================================
 
 class SearchWorker(QThread):
@@ -66,25 +66,6 @@ class SearchWorker(QThread):
     def run(self):
         results, is_online = self.searcher.search(self.query)
         self.finished.emit(results, is_online)
-
-
-class GenerationWorker(QThread):
-    """Background thread for PDF generation."""
-    progress = pyqtSignal(str, int)  # message, percent
-    finished = pyqtSignal(object)  # GenerationResult
-
-    def __init__(self, structure: MoleculeStructure, output_dir: Path, settings: GenerationSettings):
-        super().__init__()
-        self.structure = structure
-        self.output_dir = output_dir
-        self.settings = settings
-
-    def run(self):
-        pipeline = GenerationPipeline(
-            progress_callback=lambda msg, pct: self.progress.emit(msg, pct)
-        )
-        result = pipeline.generate(self.structure, self.output_dir, self.settings)
-        self.finished.emit(result)
 
 
 class XtbDownloadWorker(QThread):
@@ -104,10 +85,12 @@ class XtbDensityWorker(QThread):
     progress = pyqtSignal(str)  # status message
     finished = pyqtSignal(object, object, object)  # promolecule, molecular, deformation
 
-    def __init__(self, structure: MoleculeStructure, plane_definition=None):
+    def __init__(self, structure: MoleculeStructure, plane_definition=None,
+                 resolution: str | float = 0.2):
         super().__init__()
         self.structure = structure
         self.plane_definition = plane_definition
+        self.resolution = resolution
 
     def run(self):
         from dorothy.core.xtb_manager import is_xtb_installed, run_xtb_density
@@ -126,7 +109,7 @@ class XtbDensityWorker(QThread):
             self.progress.emit("Generating promolecule density...")
             promolecule = create_density_cube_from_structure(
                 self.structure,
-                resolution="coarse",
+                resolution=self.resolution,
                 align_to_principal_axes=(self.plane_definition is None),
                 plane_definition=self.plane_definition
             )
@@ -156,6 +139,67 @@ class XtbDensityWorker(QThread):
             self.progress.emit(f"Error: {e}")
 
         self.finished.emit(promolecule, molecular, deformation)
+
+
+class PdfExportWorker(QThread):
+    """Background thread for PDF export from viewer state."""
+    progress = pyqtSignal(str, int)  # message, percent
+    finished = pyqtSignal(bool, str, str)  # success, error_message, output_dir
+
+    def __init__(self, promolecule_cube, deformation_cube, output_dir: Path,
+                 n_slices: int, color_mode: str, molecule_name: str, formula: str):
+        super().__init__()
+        self.promolecule_cube = promolecule_cube
+        self.deformation_cube = deformation_cube
+        self.output_dir = Path(output_dir)
+        self.n_slices = n_slices
+        self.color_mode = color_mode
+        self.molecule_name = molecule_name
+        self.formula = formula
+
+    def run(self):
+        from dorothy.core.contours import (
+            ContourSettings,
+            generate_promolecule_contours,
+            generate_deformation_contours,
+            create_info_page,
+        )
+
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+
+            settings = ContourSettings(
+                n_slices=self.n_slices,
+                color_mode=self.color_mode,
+            )
+
+            if self.promolecule_cube:
+                self.progress.emit("Generating promolecule slices...", 20)
+                promol_dir = self.output_dir / "promolecule"
+                generate_promolecule_contours(
+                    self.promolecule_cube, promol_dir, settings,
+                    lambda curr, total, msg: self.progress.emit(msg, 20 + int(30 * curr / total))
+                )
+
+            if self.deformation_cube:
+                self.progress.emit("Generating deformation slices...", 55)
+                deform_dir = self.output_dir / "deformation"
+                generate_deformation_contours(
+                    self.deformation_cube, deform_dir, settings,
+                    lambda curr, total, msg: self.progress.emit(msg, 55 + int(30 * curr / total))
+                )
+
+            self.progress.emit("Creating info page...", 90)
+            create_info_page(
+                self.molecule_name, self.formula, settings,
+                self.output_dir / "info.pdf"
+            )
+
+            self.progress.emit("Export complete!", 100)
+            self.finished.emit(True, "", str(self.output_dir))
+
+        except Exception as e:
+            self.finished.emit(False, str(e), "")
 
 
 # =============================================================================
@@ -281,6 +325,377 @@ class XtbDownloadDialog(QDialog):
 
 
 # =============================================================================
+# Help Dialog
+# =============================================================================
+
+class HelpDialog(QDialog):
+    """Comprehensive help dialog explaining Dorothy's purpose, workflow, and science."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(self.tr("Dorothy — Help"))
+        self.setMinimumSize(750, 600)
+        self.setModal(True)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 16)
+        layout.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        content = QLabel()
+        content.setWordWrap(True)
+        content.setTextFormat(Qt.TextFormat.RichText)
+        content.setOpenExternalLinks(True)
+        content.setFont(_font(S.SIZE_SUBTITLE))
+        content.setStyleSheet(f"color: {S.TEXT}; padding: 32px 40px;")
+        content.setText(self._build_html())
+
+        scroll.setWidget(content)
+        layout.addWidget(scroll)
+
+        close_btn = QPushButton(self.tr("Close"))
+        close_btn.setFont(_font(S.SIZE_BODY))
+        close_btn.setStyleSheet(S.btn_secondary())
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+
+    def _build_html(self) -> str:
+        a = S.ACCENT
+        s = S.TEXT_SECONDARY
+        f = S.FONT_FAMILY
+
+        return self.tr(
+            '<div style="font-family: \'{f}\'; line-height: 1.7; font-size: 14pt;">'
+
+            # --- What is Dorothy? ---
+            '<h2 style="color: {a}; margin-top: 0;">What is Dorothy?</h2>'
+            '<p>Dorothy is a teaching tool for visualizing electron density '
+            'inside molecules. It takes a molecular structure from a '
+            'crystallographic database, computes the electron density on a '
+            'three-dimensional grid, and slices that grid into a stack of '
+            'two-dimensional contour maps suitable for printing on '
+            'transparency sheets. When stacked, these sheets form a tangible, '
+            'physical model of the electron cloud.</p>'
+            '<p>Electron density is the central quantity in structural '
+            'chemistry. It describes the probability of finding an electron '
+            'at any given point in space, and its shape governs how atoms '
+            'bond, how molecules react, and what properties a material will '
+            'have. Despite its importance, electron density remains abstract '
+            'for most students because it cannot be seen directly. Dorothy '
+            'makes it concrete.</p>'
+
+            # --- How to use Dorothy ---
+            '<h2 style="color: {a};">How to use Dorothy</h2>'
+            '<p><b>1. Search.</b> Enter a molecule name on the home screen '
+            '(e.g. aspirin, benzene, caffeine). Dorothy queries the '
+            'Crystallography Open Database for matching crystal structures.</p>'
+            '<p><b>2. Select.</b> Choose a result from the list. The '
+            'molecular formula, atom count, and space group are displayed. '
+            'Dorothy downloads the crystal structure file (CIF) and extracts '
+            'a single molecule from the unit cell.</p>'
+            '<p><b>3. Configure.</b> Set the grid resolution, the number of '
+            'slices, the color scheme, and which density types to generate.</p>'
+            '<p><b>4. Generate.</b> Dorothy computes the electron density and '
+            'produces the PDF slices. Depending on molecule size and '
+            'resolution, this takes a few seconds to a few minutes.</p>'
+            '<p><b>5. Explore.</b> Use the interactive 3D viewer to browse '
+            'slices, rotate the molecule, switch density types, and toggle '
+            'between contour lines, bonds, and heatmap overlays.</p>'
+
+            # --- Where does the data come from? ---
+            '<h2 style="color: {a};">Where does the data come from?</h2>'
+            '<p>Molecular structures are drawn from the Crystallography Open '
+            'Database (COD), a free, open-access repository containing over '
+            '500,000 experimentally determined crystal structures '
+            '(<a href="https://doi.org/10.1093/nar/gkr900">'
+            'Gra\u017eulis <i>et al.</i>, 2012</a>).</p>'
+            '<p>Each structure was determined by X-ray diffraction. In this '
+            'technique, X-rays are passed through a crystal, producing a '
+            'diffraction pattern that encodes the positions of the atoms in '
+            'the lattice. From this pattern, crystallographers reconstruct '
+            'the three-dimensional arrangement of every atom. The result is '
+            'stored in a Crystallographic Information File (CIF), which '
+            'records the fractional coordinates of each atom, the unit cell '
+            'parameters (the size and shape of the repeating unit), and the '
+            'space group (the symmetry operations relating molecules within '
+            'the crystal) '
+            '(<a href="https://doi.org/10.1107/S010876739101067X">'
+            'Hall, Allen &amp; Brown, 1991</a>).</p>'
+            '<p>Dorothy reads the CIF, applies the symmetry operations to '
+            'generate all atoms in the unit cell, and extracts a single '
+            'molecule by identifying bonded clusters.</p>'
+
+            # --- What is electron density? ---
+            '<h2 style="color: {a};">What is electron density?</h2>'
+            '<p>Electron density is a scalar field that assigns a value, '
+            'measured in electrons per cubic angstrom (e/\u00c5\u00b3), to '
+            'every point in space. Near an atomic nucleus the density is '
+            'high, reflecting the concentration of core and valence '
+            'electrons. Far from any atom it approaches zero. Between bonded '
+            'atoms a ridge of elevated density connects the two nuclei, '
+            'making the chemical bond directly visible in the topology of '
+            'the field '
+            '(<a href="https://global.oup.com/academic/product/'
+            'atoms-in-molecules-9780198558651">Bader, 1990</a>).</p>'
+            '<p>Contour maps are the standard representation of electron '
+            'density. Each contour line connects points of equal density, '
+            'analogous to altitude contours on a topographic map. Tightly '
+            'spaced contours indicate a steep gradient; widely spaced '
+            'contours indicate a plateau.</p>'
+
+            # --- Three types of density ---
+            '<h2 style="color: {a};">Three types of density</h2>'
+
+            '<h3 style="color: {a};">Promolecule density</h3>'
+            '<p>The promolecule model places each atom at its '
+            'crystallographic position but treats every atom as an isolated, '
+            'non-interacting sphere. The total density is simply the '
+            'superposition of these free-atom densities. This model serves '
+            'as a chemically meaningful baseline: it represents what the '
+            'electron distribution would look like in the absence of any '
+            'bonding interaction '
+            '(<a href="https://doi.org/10.1021/j100401a010">'
+            'Spackman &amp; Maslen, 1986</a>).</p>'
+
+            '<h3 style="color: {a};">Molecular density</h3>'
+            '<p>The molecular density is computed from quantum mechanics. '
+            'Dorothy uses the GFN2-xTB method (Extended Tight-Binding), a '
+            'semi-empirical approach developed by the Grimme group at the '
+            'University of Bonn '
+            '(<a href="https://doi.org/10.1021/acs.jctc.8b01176">'
+            'Bannwarth, Ehlert &amp; Grimme, 2019</a>; '
+            '<a href="https://doi.org/10.1021/acs.jctc.7b00118">'
+            'Grimme, Bannwarth &amp; Shushkov, 2017</a>). '
+            'xTB solves an approximate Schr\u00f6dinger equation to '
+            'determine how electrons redistribute when atoms form bonds. '
+            'The result captures bonding density, lone pairs, and '
+            'delocalization effects that the promolecule model misses '
+            'entirely.</p>'
+            '<p>As a semi-empirical method, xTB is considerably faster than '
+            'full density functional theory while remaining accurate enough '
+            'for pedagogical visualization. For a comprehensive review of '
+            'the method family, see '
+            '<a href="https://doi.org/10.1002/wcms.1493">'
+            'Bannwarth <i>et al.</i>, 2021</a>.</p>'
+            '<p style="color: {s};"><i>Note: xTB must be installed '
+            'separately. If it is not available, only the promolecule '
+            'density is generated.</i></p>'
+
+            '<h3 style="color: {a};">Deformation density</h3>'
+            '<p>The deformation density is the difference between molecular '
+            'and promolecule densities. By subtracting the non-interacting '
+            'atomic background, it isolates the redistribution of electrons '
+            'caused by chemical bonding '
+            '(<a href="https://global.oup.com/academic/product/'
+            'x-ray-charge-densities-and-chemical-bonding-9780195098235">'
+            'Coppens, 1997</a>).</p>'
+            '<p>Positive regions indicate accumulation of electron density. '
+            'These appear between bonded atoms (shared electrons) and around '
+            'lone pairs. Negative regions indicate depletion, where density '
+            'has migrated to participate in bonding elsewhere.</p>'
+            '<p>The deformation density is the most direct visualization of '
+            'how and where atoms share electrons. It is, in effect, a '
+            'fingerprint of chemical bonding.</p>'
+
+            # --- What are the PDF slices? ---
+            '<h2 style="color: {a};">What are the PDF slices?</h2>'
+            '<p>The three-dimensional electron density is a continuous field '
+            'filling the space around the molecule. To make it physically '
+            'accessible, Dorothy sections it into parallel two-dimensional '
+            'slices along the Z-axis.</p>'
+            '<p>Each slice is exported as an A5-format PDF displaying '
+            'contour lines of constant electron density, with atom positions '
+            'and bond connections overlaid. The intended workflow is to print '
+            'each slice on a transparency sheet, then stack all sheets with '
+            'uniform spacing. Looking through the assembled stack reveals a '
+            'three-dimensional picture of the electron density that students '
+            'can hold, rotate, and examine from any angle.</p>'
+
+            # --- The 3D viewer ---
+            '<h2 style="color: {a};">The interactive 3D viewer</h2>'
+            '<p>After generating the slices, Dorothy opens an interactive '
+            'viewer for detailed exploration:</p>'
+            '<ul style="margin-left: 20px;">'
+            '<li><b>Slice slider.</b> Scroll through slices from bottom to '
+            'top to observe how the density varies along the molecular '
+            'axis.</li>'
+            '<li><b>Density type.</b> Switch between promolecule, molecular, '
+            'and deformation views.</li>'
+            '<li><b>Contour / Heatmap.</b> Toggle between contour lines '
+            '(suited for printing) and color heatmaps (suited for on-screen '
+            'analysis).</li>'
+            '<li><b>B&amp;W / Color.</b> Select monochrome or colored '
+            'contours. In deformation mode, blue marks positive regions and '
+            'red marks negative regions.</li>'
+            '<li><b>Spacing.</b> Adjust the interval between contour levels. '
+            'Tighter spacing resolves finer features; looser spacing produces '
+            'a cleaner image.</li>'
+            '<li><b>Bonds / Contours / Planes / Single / Info.</b> Toggle '
+            'individual display elements.</li>'
+            '<li><b>Zoom and Rotate.</b> Use the on-screen controls or drag '
+            'directly on the 3D canvas.</li>'
+            '<li><b>Animate.</b> Watch a smooth interpolation from '
+            'promolecule to molecular density, making bonding effects visible '
+            'in real time.</li>'
+            '</ul>'
+
+            # --- Dorothy Hodgkin ---
+            '<h2 style="color: {a};">Who was Dorothy Hodgkin?</h2>'
+            '<p>Dorothy Crowfoot Hodgkin (1910\u20131994) was a British '
+            'chemist who pioneered the use of X-ray crystallography to '
+            'determine the three-dimensional structures of biologically '
+            'important molecules. Her most celebrated achievements were the '
+            'structure determinations of penicillin (1945) and vitamin '
+            'B<sub>12</sub> (1956), both of which were considered '
+            'intractable problems at the time. She also contributed to early '
+            'crystallographic studies of cholesterol and other sterols, and '
+            'spent 35 years pursuing the structure of insulin, which she '
+            'finally solved in 1969.</p>'
+            '<p>She received the <b>Nobel Prize in Chemistry in 1964</b>, '
+            'the third woman to do so after Marie Curie (1911) and '
+            'Ir\u00e8ne Joliot-Curie (1935).</p>'
+            '<p>Her electron density maps, laboriously computed by hand and '
+            'drawn on stacked glass sheets, are the direct inspiration for '
+            'this application. Dorothy brings that method into the digital '
+            'age so that every student can experience the same insight: '
+            'seeing atoms and bonds made visible.</p>'
+
+            # --- Hodgkin's method vs Dorothy ---
+            '<h2 style="color: {a};">How Dorothy relates to Hodgkin\u2019s method</h2>'
+            '<p>Hodgkin\u2019s original workflow ran in one direction:</p>'
+            '<p style="text-align: center; font-size: 13pt; color: {s};">'
+            'Crystal \u2192 X-ray diffraction \u2192 phase problem '
+            '\u2192 electron density map \u2192 atom positions</p>'
+            '<p>She began with a physical crystal, collected a diffraction '
+            'pattern, solved the notoriously difficult '
+            '<a href="https://doi.org/10.1107/97809553602060000001">'
+            'phase problem</a>, and used the resulting electron density to '
+            'locate atoms she did not yet know.</p>'
+            '<p>Dorothy (the application) runs in the <b>opposite</b> '
+            'direction:</p>'
+            '<p style="text-align: center; font-size: 13pt; color: {s};">'
+            'Atom positions (from CIF) \u2192 computed electron density '
+            '\u2192 visualization</p>'
+            '<p>We already know where the atoms are \u2014 that information '
+            'was determined by crystallographers and deposited in the '
+            'Crystallography Open Database. Starting from those known '
+            'positions, Dorothy computes the electron density '
+            'computationally (either as a promolecule superposition or via '
+            'xTB quantum chemistry) and visualizes it.</p>'
+            '<p>Neither density shown by Dorothy comes from an X-ray '
+            'experiment directly. What comes from the experiment are the '
+            'atom positions in the CIF file. The densities are computed '
+            'from those positions, making them theoretical reconstructions '
+            'of what a crystallographer would have observed in an '
+            'experimental density map. For molecules with accurate crystal '
+            'structures, the computed and experimental densities agree '
+            'closely \u2014 the bonding features, lone pairs, and '
+            'deformation patterns are qualitatively the same.</p>'
+            '<p>In a teaching context, this reversal is powerful: students '
+            'see the electron density that Hodgkin would have painstakingly '
+            'reconstructed from diffraction data, but without needing a '
+            'crystal, an X-ray source, or months of hand calculation. They '
+            'can focus on understanding what the density reveals about '
+            'chemical bonding.</p>'
+
+            # --- Data sources and methods ---
+            '<h2 style="color: {a};">Data sources and methods</h2>'
+            '<ul style="margin-left: 20px;">'
+            '<li><b>Molecular structures:</b> Crystallography Open Database '
+            '(COD)</li>'
+            '<li><b>Quantum chemistry engine:</b> xTB by the Grimme '
+            'group</li>'
+            '<li><b>Atomic density data:</b> Thakkar and Koga tables of '
+            'spherical atomic densities '
+            '(<a href="https://doi.org/10.1007/BF02341696">'
+            'Koga, 1997</a>)</li>'
+            '</ul>'
+
+            # --- References ---
+            '<h2 style="color: {a};">References</h2>'
+            '<p style="font-size: 12pt; line-height: 1.6;">'
+
+            'Gra\u017eulis, S. <i>et al.</i> (2012). Crystallography Open '
+            'Database (COD): an open-access collection of crystal structures '
+            'and platform for world-wide collaboration. <i>Nucleic Acids '
+            'Research</i>, 40(D1), D420\u2013D427. '
+            '<a href="https://doi.org/10.1093/nar/gkr900">'
+            'DOI: 10.1093/nar/gkr900</a><br><br>'
+
+            'Hall, S.R., Allen, F.H. &amp; Brown, I.D. (1991). The '
+            'crystallographic information file (CIF): a new standard archive '
+            'file for crystallography. <i>Acta Crystallographica Section A</i>, '
+            '47(6), 655\u2013685. '
+            '<a href="https://doi.org/10.1107/S010876739101067X">'
+            'DOI: 10.1107/S010876739101067X</a><br><br>'
+
+            'Bader, R.F.W. (1990). <i>Atoms in Molecules: A Quantum Theory</i>. '
+            'Oxford University Press. ISBN: 978-0-19-855865-1<br><br>'
+
+            'Spackman, M.A. &amp; Maslen, E.N. (1986). Chemical properties '
+            'from the promolecule. <i>Journal of Physical Chemistry</i>, '
+            '90(10), 2020\u20132027. '
+            '<a href="https://doi.org/10.1021/j100401a010">'
+            'DOI: 10.1021/j100401a010</a><br><br>'
+
+            'Coppens, P. (1997). <i>X-Ray Charge Densities and Chemical '
+            'Bonding</i>. Oxford University Press. '
+            'ISBN: 978-0-19-509823-5<br><br>'
+
+            'Grimme, S., Bannwarth, C. &amp; Shushkov, P. (2017). A robust '
+            'and accurate tight-binding quantum chemical method for structures, '
+            'vibrational frequencies, and noncovalent interactions of large '
+            'molecular systems parametrized for all spd-block elements '
+            '(Z = 1\u201386). <i>Journal of Chemical Theory and Computation</i>, '
+            '13(5), 1989\u20132009. '
+            '<a href="https://doi.org/10.1021/acs.jctc.7b00118">'
+            'DOI: 10.1021/acs.jctc.7b00118</a><br><br>'
+
+            'Bannwarth, C., Ehlert, S. &amp; Grimme, S. (2019). GFN2-xTB: '
+            'an accurate and broadly parametrized self-consistent tight-binding '
+            'quantum chemical method with multipole electrostatics and '
+            'density-dependent dispersion contributions. <i>Journal of '
+            'Chemical Theory and Computation</i>, 15(3), 1652\u20131671. '
+            '<a href="https://doi.org/10.1021/acs.jctc.8b01176">'
+            'DOI: 10.1021/acs.jctc.8b01176</a><br><br>'
+
+            'Bannwarth, C. <i>et al.</i> (2021). Extended tight-binding '
+            'quantum chemistry methods. <i>WIREs Computational Molecular '
+            'Science</i>, 11, e01493. '
+            '<a href="https://doi.org/10.1002/wcms.1493">'
+            'DOI: 10.1002/wcms.1493</a><br><br>'
+
+            'Koga, T. (1997). Analytical Hartree-Fock electron densities '
+            'for atoms He through Lr. <i>Theoretical Chemistry Accounts</i>, '
+            '95, 113\u2013130. '
+            '<a href="https://doi.org/10.1007/BF02341696">'
+            'DOI: 10.1007/BF02341696</a><br><br>'
+
+            'Koga, T., Kanayama, K., Watanabe, S. &amp; Thakkar, A.J. (1999). '
+            'Analytical Hartree-Fock wave functions subject to cusp and '
+            'asymptotic constraints: He to Xe, Li+ to Cs+, H\u2212 to I\u2212. '
+            '<i>International Journal of Quantum Chemistry</i>, 71(6), '
+            '491\u2013497. '
+            '<a href="https://doi.org/10.1002/(SICI)1097-461X(1999)71:6'
+            '%3C491::AID-QUA6%3E3.0.CO;2-T">'
+            'DOI: 10.1002/(SICI)1097-461X(1999)71:6</a><br><br>'
+
+            'Koga, T., Kanayama, K., Watanabe, T., Imai, T. &amp; '
+            'Thakkar, A.J. (2000). Analytical Hartree-Fock wave functions '
+            'for the atoms Cs to Lr. <i>Theoretical Chemistry Accounts</i>, '
+            '104, 411\u2013413. '
+            '<a href="https://doi.org/10.1007/s002140000150">'
+            'DOI: 10.1007/s002140000150</a>'
+
+            '</p>'
+            '</div>'
+        ).format(f=f, a=a, s=s)
+
+
+# =============================================================================
 # Main Window
 # =============================================================================
 
@@ -294,17 +709,16 @@ class MainWindow(QMainWindow):
         icon_path = Path(__file__).parent.parent.parent / "logo" / "dorothy_logo_icon.png"
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
-        self.showMaximized()
 
         self.searcher = CODSearch()
         self.search_worker: SearchWorker | None = None
-        self.generation_worker: GenerationWorker | None = None
         self.xtb_density_worker: XtbDensityWorker | None = None
+        self.pdf_export_worker: PdfExportWorker | None = None
         self.current_results = []
         self.selected_molecule: MoleculeResult | None = None
         self.selected_structure: MoleculeStructure | None = None
-        self.last_result: GenerationResult | None = None
         self.selection_manager = None
+        self._density_show_processing = False
 
         central_widget = QWidget()
         central_widget.setObjectName("dorothy_central")
@@ -321,14 +735,49 @@ class MainWindow(QMainWindow):
         self.results_screen = self._create_results_screen()
         self.preview_screen = self._create_preview_screen()
         self.processing_screen = self._create_processing_screen()
-        self.complete_screen = self._create_complete_screen()
         self.stacked_widget.addWidget(self.home_screen)
         self.stacked_widget.addWidget(self.results_screen)
         self.stacked_widget.addWidget(self.preview_screen)
         self.stacked_widget.addWidget(self.processing_screen)
-        self.stacked_widget.addWidget(self.complete_screen)
 
         self.stacked_widget.setCurrentWidget(self.home_screen)
+
+        # Floating "?" help button — always visible, top-right
+        self.help_btn = QPushButton("?")
+        self.help_btn.setParent(central_widget)
+        self.help_btn.setObjectName("help_btn")
+        self.help_btn.setFont(_font(S.SIZE_SUBTITLE, bold=True))
+        self.help_btn.setFixedSize(36, 36)
+        self.help_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.help_btn.setToolTip(self.tr("About Dorothy"))
+        self.help_btn.setStyleSheet(f"""
+            #help_btn {{
+                background-color: white;
+                color: {S.TEXT_SECONDARY};
+                border: 2px solid {S.BORDER};
+                border-radius: 18px;
+                font-size: {S.SIZE_SUBTITLE}pt;
+                font-family: "{S.FONT_FAMILY}";
+                font-weight: bold;
+            }}
+            #help_btn:hover {{
+                border-color: {S.ACCENT};
+                color: {S.ACCENT};
+            }}
+        """)
+        self.help_btn.raise_()
+        self.help_btn.clicked.connect(self._show_help)
+
+        # Connect viewer export signal
+        self.slice_explorer.export_requested.connect(self._on_export_pdf)
+
+        # Show maximized AFTER help button exists, so resizeEvent positions it
+        self.showMaximized()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'help_btn'):
+            self.help_btn.move(self.centralWidget().width() - 52, 12)
 
     # =========================================================================
     # Home Screen
@@ -492,7 +941,7 @@ class MainWindow(QMainWindow):
         return screen
 
     # =========================================================================
-    # Preview Screen
+    # Preview Screen — WYSIWYG: Resolution + Generate, viewer has all controls
     # =========================================================================
 
     def _create_preview_screen(self) -> QWidget:
@@ -557,6 +1006,28 @@ class MainWindow(QMainWindow):
         view_toggle.addWidget(self.reset_plane_btn)
 
         view_toggle.addStretch()
+
+        # Detail level + Generate button
+        self.detail_combo = QComboBox()
+        self.detail_combo.setFont(_font())
+        self.detail_combo.setStyleSheet(S.combo_style())
+        self.detail_combo.addItems(["Fast", "Good", "Best"])
+        self.detail_combo.setToolTip(
+            "Fast = quick preview (0.20 \u00c5)\n"
+            "Good = teaching quality (0.10 \u00c5)\n"
+            "Best = high detail (0.05 \u00c5)"
+        )
+        view_toggle.addWidget(self.detail_combo)
+
+        view_toggle.addSpacing(8)
+
+        self.generate_btn = QPushButton(self.tr("Generate"))
+        self.generate_btn.setFont(_font(bold=True))
+        self.generate_btn.setStyleSheet(S.btn_primary())
+        self.generate_btn.setToolTip("Compute electron density at the selected detail level")
+        self.generate_btn.clicked.connect(self._on_generate)
+        view_toggle.addWidget(self.generate_btn)
+
         viewer_container.addLayout(view_toggle)
 
         # Viewer stack (2D / 3D)
@@ -581,120 +1052,6 @@ class MainWindow(QMainWindow):
 
         content.addLayout(viewer_container, stretch=1)
         layout.addLayout(content)
-
-        # Collapsible PDF Export section
-        self.pdf_toggle_btn = QPushButton(self.tr("PDF Export Settings  >"))
-        self.pdf_toggle_btn.setFont(_font(bold=True))
-        self.pdf_toggle_btn.setStyleSheet(S.btn_ghost())
-        self.pdf_toggle_btn.clicked.connect(self._toggle_pdf_settings)
-        self.pdf_toggle_btn.hide()
-        layout.addWidget(self.pdf_toggle_btn)
-
-        self.settings_widget = QWidget()
-        settings_panel = QVBoxLayout(self.settings_widget)
-        settings_panel.setSpacing(10)
-        settings_panel.setContentsMargins(20, 0, 20, 10)
-
-        settings_row = QHBoxLayout()
-        settings_row.setSpacing(15)
-
-        # Resolution
-        res_group = QGroupBox(self.tr("Resolution"))
-        res_group.setFont(_font(S.SIZE_SMALL, bold=True))
-        res_group.setStyleSheet(S.groupbox_style())
-        res_layout = QVBoxLayout(res_group)
-        self.resolution_combo = QComboBox()
-        self.resolution_combo.setFont(_font())
-        self.resolution_combo.setStyleSheet(S.combo_style())
-        self.resolution_combo.addItems([
-            self.tr("Coarse (~0.2 A)"),
-            self.tr("Medium (~0.1 A)"),
-            self.tr("Fine (~0.05 A)"),
-        ])
-        self.resolution_combo.setCurrentIndex(1)
-        res_layout.addWidget(self.resolution_combo)
-        settings_row.addWidget(res_group)
-
-        # Slices
-        slice_group = QGroupBox(self.tr("Slices"))
-        slice_group.setFont(_font(S.SIZE_SMALL, bold=True))
-        slice_group.setStyleSheet(S.groupbox_style())
-        slice_layout = QHBoxLayout(slice_group)
-        num_label = QLabel(self.tr("Number:"))
-        num_label.setFont(_font())
-        num_label.setStyleSheet(S.label_title())
-        slice_layout.addWidget(num_label)
-        self.slice_spinbox = QSpinBox()
-        self.slice_spinbox.setFont(_font())
-        self.slice_spinbox.setStyleSheet(S.spinbox_style())
-        self.slice_spinbox.setRange(5, 30)
-        self.slice_spinbox.setValue(15)
-        slice_layout.addWidget(self.slice_spinbox)
-        settings_row.addWidget(slice_group)
-
-        # Output
-        output_group = QGroupBox(self.tr("Output"))
-        output_group.setFont(_font(S.SIZE_SMALL, bold=True))
-        output_group.setStyleSheet(S.groupbox_style())
-        output_layout = QVBoxLayout(output_group)
-        self.promolecule_check = QCheckBox(self.tr("Promolecule"))
-        self.promolecule_check.setFont(_font())
-        self.promolecule_check.setStyleSheet(S.checkbox_style())
-        self.promolecule_check.setChecked(True)
-        output_layout.addWidget(self.promolecule_check)
-        self.deformation_check = QCheckBox(self.tr("Deformation"))
-        self.deformation_check.setFont(_font())
-        self.deformation_check.setStyleSheet(S.checkbox_style())
-        self.deformation_check.setChecked(True)
-        output_layout.addWidget(self.deformation_check)
-        settings_row.addWidget(output_group)
-
-        # Color Mode
-        color_group = QGroupBox(self.tr("Color Mode"))
-        color_group.setFont(_font(S.SIZE_SMALL, bold=True))
-        color_group.setStyleSheet(S.groupbox_style())
-        color_layout = QVBoxLayout(color_group)
-        self.color_combo = QComboBox()
-        self.color_combo.setFont(_font())
-        self.color_combo.setStyleSheet(S.combo_style())
-        self.color_combo.addItems([
-            self.tr("Black & White"),
-            self.tr("Color"),
-        ])
-        color_layout.addWidget(self.color_combo)
-        settings_row.addWidget(color_group)
-
-        # Detail Level
-        detail_group = QGroupBox(self.tr("Detail Level"))
-        detail_group.setFont(_font(S.SIZE_SMALL, bold=True))
-        detail_group.setStyleSheet(S.groupbox_style())
-        detail_layout = QVBoxLayout(detail_group)
-        self.detail_combo = QComboBox()
-        self.detail_combo.setFont(_font())
-        self.detail_combo.setStyleSheet(S.combo_style())
-        self.detail_combo.addItems([
-            self.tr("Simple"),
-            self.tr("Advanced"),
-        ])
-        self.detail_combo.setCurrentIndex(0)
-        detail_layout.addWidget(self.detail_combo)
-        settings_row.addWidget(detail_group)
-
-        settings_panel.addLayout(settings_row)
-
-        # Generate button
-        gen_row = QHBoxLayout()
-        gen_row.addStretch()
-        self.generate_btn = QPushButton(self.tr("Generate PDFs"))
-        self.generate_btn.setFont(_font(13, bold=True))
-        self.generate_btn.setStyleSheet(S.btn_primary())
-        self.generate_btn.clicked.connect(self._on_generate)
-        gen_row.addWidget(self.generate_btn)
-        gen_row.addStretch()
-        settings_panel.addLayout(gen_row)
-
-        self.settings_widget.hide()
-        layout.addWidget(self.settings_widget)
 
         return screen
 
@@ -736,57 +1093,7 @@ class MainWindow(QMainWindow):
         return screen
 
     # =========================================================================
-    # Complete Screen
-    # =========================================================================
-
-    def _create_complete_screen(self) -> QWidget:
-        screen = QWidget()
-        screen.setObjectName("complete_screen")
-        screen.setStyleSheet("#complete_screen { background-color: #ffffff; }")
-        layout = QVBoxLayout(screen)
-        layout.setContentsMargins(40, 40, 40, 40)
-        layout.setSpacing(20)
-
-        layout.addStretch()
-
-        title = QLabel(self.tr("Complete!"))
-        title.setFont(_font(28, bold=True))
-        title.setStyleSheet(S.label_success())
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title)
-
-        self.complete_summary = QLabel()
-        self.complete_summary.setFont(_font())
-        self.complete_summary.setStyleSheet(S.label_secondary())
-        self.complete_summary.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.complete_summary)
-
-        layout.addSpacing(20)
-
-        button_layout = QHBoxLayout()
-        button_layout.addStretch()
-
-        self.open_folder_btn = QPushButton(self.tr("Open Folder"))
-        self.open_folder_btn.setFont(_font())
-        self.open_folder_btn.setStyleSheet(S.btn_secondary())
-        self.open_folder_btn.clicked.connect(self._open_output_folder)
-        button_layout.addWidget(self.open_folder_btn)
-
-        self.new_molecule_btn = QPushButton(self.tr("New Molecule"))
-        self.new_molecule_btn.setFont(_font())
-        self.new_molecule_btn.setStyleSheet(S.btn_primary())
-        self.new_molecule_btn.clicked.connect(self._go_home)
-        button_layout.addWidget(self.new_molecule_btn)
-
-        button_layout.addStretch()
-        layout.addLayout(button_layout)
-
-        layout.addStretch()
-
-        return screen
-
-    # =========================================================================
-    # Logic (unchanged)
+    # Logic
     # =========================================================================
 
     def _cleanup_worker(self, worker: QThread | None) -> None:
@@ -795,6 +1102,10 @@ class MainWindow(QMainWindow):
             worker.wait(1000)
             if worker.isRunning():
                 worker.terminate()
+
+    def _show_help(self):
+        dialog = HelpDialog(self)
+        dialog.exec()
 
     def _on_search(self):
         search_text = self.search_input.text().strip()
@@ -967,147 +1278,77 @@ class MainWindow(QMainWindow):
         if self.selected_structure:
             self._start_3d_density_calculation()
 
+    # =========================================================================
+    # Generate — computes density cubes and shows in 3D viewer
+    # =========================================================================
+
     def _on_generate(self):
+        """Compute density at the selected detail level and show in viewer."""
         if not self.selected_structure:
-            QMessageBox.warning(self, "Error", "No molecule structure available.")
             return
 
-        wants_deformation = self.deformation_check.isChecked()
-        if wants_deformation and not is_xtb_installed():
-            dialog = XtbDownloadDialog(self)
-            result = dialog.exec()
-            if result == QDialog.DialogCode.Rejected:
-                self.deformation_check.setChecked(False)
-            elif not is_xtb_installed():
-                self.deformation_check.setChecked(False)
-
-        default_name = self.selected_molecule.name.lower().replace(' ', '_')
-        output_dir = QFileDialog.getExistingDirectory(
-            self,
-            self.tr("Select Output Directory"),
-            str(Path.home() / "Desktop"),
-        )
-
-        if not output_dir:
-            return
-
-        output_path = Path(output_dir) / f"{default_name}_dorothy"
-
-        resolution_idx = self.resolution_combo.currentIndex()
-        resolution = ["coarse", "medium", "fine"][resolution_idx]
-        detail_level = "simple" if self.detail_combo.currentIndex() == 0 else "advanced"
-
-        settings = GenerationSettings(
+        detail_map = {"Fast": 0.20, "Good": 0.10, "Best": 0.05}
+        resolution = detail_map.get(self.detail_combo.currentText(), 0.20)
+        self._start_3d_density_calculation(
             resolution=resolution,
-            n_slices=self.slice_spinbox.value(),
-            generate_promolecule=self.promolecule_check.isChecked(),
-            generate_deformation=self.deformation_check.isChecked(),
-            color_mode="bw" if self.color_combo.currentIndex() == 0 else "color",
-            detail_level=detail_level,
+            show_processing=True
         )
 
-        self.progress_bar.setValue(0)
-        self.progress_label.setText(self.tr("Starting..."))
-        self.stacked_widget.setCurrentWidget(self.processing_screen)
+    def _start_3d_density_calculation(self, resolution: str | float = "coarse",
+                                       show_processing: bool = False):
+        """Start density computation in background.
 
-        self._cleanup_worker(self.generation_worker)
-
-        self.generation_worker = GenerationWorker(
-            self.selected_structure, output_path, settings
-        )
-        self.generation_worker.progress.connect(self._on_generation_progress)
-        self.generation_worker.finished.connect(self._on_generation_complete)
-        self.generation_worker.start()
-
-    def _on_generation_progress(self, message: str, percent: int):
-        self.progress_bar.setValue(percent)
-        self.progress_label.setText(message)
-
-    def _on_generation_complete(self, result: GenerationResult):
-        self.last_result = result
-
-        if result.success:
-            n_promol = len(result.promolecule_pdfs)
-            n_deform = len(result.deformation_pdfs)
-            total = n_promol + n_deform
-
-            summary = f"Generated {total} PDF slices\n"
-            if n_promol > 0:
-                summary += f"Promolecule: {n_promol} slices\n"
-            if n_deform > 0:
-                summary += f"Deformation: {n_deform} slices\n"
-            if result.used_xtb:
-                summary += "\n(Used xTB for molecular density)"
-            else:
-                summary += "\n(Promolecule density only - install xTB for deformation)"
-
-            self.complete_summary.setText(summary)
-            self.stacked_widget.setCurrentWidget(self.complete_screen)
-        else:
-            QMessageBox.critical(
-                self,
-                "Generation Failed",
-                f"Error: {result.error_message}"
-            )
-            self.stacked_widget.setCurrentWidget(self.preview_screen)
-
-    def _open_output_folder(self):
-        if self.last_result and self.last_result.output_dir:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.last_result.output_dir)))
-
-    def _go_home(self):
-        self.stacked_widget.setCurrentWidget(self.home_screen)
-
-    def _go_to_results(self):
-        self.stacked_widget.setCurrentWidget(self.results_screen)
-
-    def _toggle_pdf_settings(self):
-        visible = self.settings_widget.isVisible()
-        self.settings_widget.setVisible(not visible)
-        if visible:
-            self.pdf_toggle_btn.setText(self.tr("PDF Export Settings  >"))
-        else:
-            self.pdf_toggle_btn.setText(self.tr("PDF Export Settings  v"))
-
-    def _switch_view(self, view: str):
-        if view == "2d":
-            self.view_2d_btn.setChecked(True)
-            self.view_3d_btn.setChecked(False)
-            self.viewer_stack.setCurrentWidget(self.molecule_viewer)
-            self.pdf_toggle_btn.hide()
-            self.settings_widget.hide()
-        else:
-            self.view_2d_btn.setChecked(False)
-            self.view_3d_btn.setChecked(True)
-            self.viewer_stack.setCurrentWidget(self.slice_explorer)
-            self.pdf_toggle_btn.show()
-
-            if self.selected_structure and self.slice_explorer._promolecule_cube is None:
-                self._start_3d_density_calculation()
-
-    def _start_3d_density_calculation(self):
+        Args:
+            resolution: Grid spacing (float in Å) or string preset
+            show_processing: If True, show the processing screen during computation
+        """
         if not self.selected_structure:
             return
 
-        self.mol_info_label.setText("Calculating density...")
+        self._density_show_processing = show_processing
+
+        if show_processing:
+            self.progress_bar.setValue(0)
+            self.progress_label.setText(self.tr("Computing density..."))
+            self.stacked_widget.setCurrentWidget(self.processing_screen)
+            self.generate_btn.setEnabled(False)
+        else:
+            self.mol_info_label.setText("Calculating density...")
+
         self._cleanup_worker(self.xtb_density_worker)
 
         plane_def = getattr(self, '_current_plane_definition', None)
 
         self.xtb_density_worker = XtbDensityWorker(
             self.selected_structure,
-            plane_definition=plane_def
+            plane_definition=plane_def,
+            resolution=resolution
         )
         self.xtb_density_worker.progress.connect(self._on_xtb_density_progress)
         self.xtb_density_worker.finished.connect(self._on_xtb_density_complete)
         self.xtb_density_worker.start()
 
     def _on_xtb_density_progress(self, message: str):
-        self.mol_info_label.setText(message)
+        if self._density_show_processing:
+            self.progress_label.setText(message)
+            # Estimate progress from message content
+            msg_lower = message.lower()
+            if "promolecule" in msg_lower:
+                self.progress_bar.setValue(20)
+            elif "running xtb" in msg_lower or "xtb" in msg_lower:
+                self.progress_bar.setValue(40)
+            elif "processing" in msg_lower:
+                self.progress_bar.setValue(70)
+            elif "ready" in msg_lower:
+                self.progress_bar.setValue(95)
+        else:
+            self.mol_info_label.setText(message)
 
     def _on_xtb_density_complete(self, promolecule, molecular, deformation):
+        self.generate_btn.setEnabled(True)
+
         if promolecule:
-            n_slices = self.slice_spinbox.value()
+            n_slices = self.slice_explorer.get_n_slices()
             self.slice_explorer.set_density_cubes(
                 promolecule=promolecule,
                 molecular=molecular,
@@ -1115,33 +1356,123 @@ class MainWindow(QMainWindow):
                 n_slices=n_slices
             )
 
+        # If we were showing the processing screen, return to preview in 3D mode
+        if self._density_show_processing:
+            self._density_show_processing = False
+            self.stacked_widget.setCurrentWidget(self.preview_screen)
+            self._switch_view("3d")
+
+        # Update status message
+        if self.selected_molecule:
             if deformation:
                 self.mol_info_label.setText(
                     f"{self.selected_molecule.formula} - "
                     "Molecular & deformation density available"
                 )
-            else:
+            elif promolecule:
                 self.mol_info_label.setText(
                     f"{self.selected_molecule.formula} - "
                     "Promolecule only (install xTB for molecular)"
                 )
 
-    def _update_3d_preview(self):
-        if not self.selected_structure:
+    # =========================================================================
+    # Export PDF — generates PDFs from current viewer state
+    # =========================================================================
+
+    def _on_export_pdf(self):
+        """Export PDFs using current viewer settings (WYSIWYG)."""
+        promolecule = self.slice_explorer._promolecule_cube
+        deformation = self.slice_explorer._deformation_cube
+
+        if not promolecule and not deformation:
+            QMessageBox.warning(
+                self, self.tr("No Data"),
+                self.tr("Generate density first before exporting.")
+            )
             return
 
-        cube = create_density_cube_from_structure(
-            self.selected_structure,
-            resolution="coarse",
-            align_to_principal_axes=True
+        # Ask for output directory
+        default_name = self.selected_molecule.name.lower().replace(' ', '_') if self.selected_molecule else "molecule"
+        output_dir = QFileDialog.getExistingDirectory(
+            self,
+            self.tr("Select Output Directory"),
+            str(Path.home() / "Desktop"),
         )
+        if not output_dir:
+            return
 
-        n_slices = self.slice_spinbox.value()
-        self.slice_explorer.set_density_cubes(
-            promolecule=cube,
-            deformation=None,
-            n_slices=n_slices
+        output_path = Path(output_dir) / f"{default_name}_dorothy"
+
+        # Get viewer settings
+        n_slices = self.slice_explorer.get_n_slices()
+        color_mode = self.slice_explorer.canvas._color_mode
+
+        # Show processing screen
+        self.progress_bar.setValue(0)
+        self.progress_label.setText(self.tr("Exporting PDFs..."))
+        self.stacked_widget.setCurrentWidget(self.processing_screen)
+
+        # Start export worker
+        self._cleanup_worker(self.pdf_export_worker)
+        self.pdf_export_worker = PdfExportWorker(
+            promolecule_cube=promolecule,
+            deformation_cube=deformation,
+            output_dir=output_path,
+            n_slices=n_slices,
+            color_mode=color_mode,
+            molecule_name=self.selected_molecule.name if self.selected_molecule else "Unknown",
+            formula=self.selected_molecule.formula if self.selected_molecule else "",
         )
+        self.pdf_export_worker.progress.connect(self._on_pdf_export_progress)
+        self.pdf_export_worker.finished.connect(self._on_pdf_export_complete)
+        self.pdf_export_worker.start()
+
+    def _on_pdf_export_progress(self, message: str, percent: int):
+        self.progress_label.setText(message)
+        self.progress_bar.setValue(percent)
+
+    def _on_pdf_export_complete(self, success: bool, error_message: str, output_dir: str):
+        # Return to preview screen in 3D view
+        self.stacked_widget.setCurrentWidget(self.preview_screen)
+        self._switch_view("3d")
+
+        if success:
+            reply = QMessageBox.information(
+                self, self.tr("Export Complete"),
+                self.tr(f"PDFs exported to:\n{output_dir}\n\nOpen folder?"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(output_dir))
+        else:
+            QMessageBox.critical(
+                self, self.tr("Export Failed"),
+                self.tr(f"Error: {error_message}")
+            )
+
+    # =========================================================================
+    # Navigation
+    # =========================================================================
+
+    def _go_home(self):
+        self.stacked_widget.setCurrentWidget(self.home_screen)
+
+    def _go_to_results(self):
+        self.stacked_widget.setCurrentWidget(self.results_screen)
+
+    def _switch_view(self, view: str):
+        if view == "2d":
+            self.view_2d_btn.setChecked(True)
+            self.view_3d_btn.setChecked(False)
+            self.viewer_stack.setCurrentWidget(self.molecule_viewer)
+        else:
+            self.view_2d_btn.setChecked(False)
+            self.view_3d_btn.setChecked(True)
+            self.viewer_stack.setCurrentWidget(self.slice_explorer)
+
+            if self.selected_structure and self.slice_explorer._promolecule_cube is None:
+                self._start_3d_density_calculation()
 
     def tr(self, text: str) -> str:
         return QCoreApplication.translate("MainWindow", text)
