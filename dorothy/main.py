@@ -3,10 +3,10 @@ Dorothy - Main Application Entry Point
 """
 
 import sys
-from pathlib import Path
 from PyQt6.QtWidgets import QApplication, QStyleFactory
 from PyQt6.QtCore import QTranslator, QLocale, QLibraryInfo
 from PyQt6.QtGui import QFontDatabase, QFont
+from dorothy import _base_dir
 from dorothy.ui.main_window import MainWindow
 from dorothy.ui.styles import FONT_FAMILY, SIZE_BODY
 
@@ -17,10 +17,10 @@ def main():
     app.setStyle(QStyleFactory.create("Fusion"))
     app.setApplicationName("Dorothy")
     app.setOrganizationName("Dorothy")
-    app.setApplicationVersion("0.1.0")
+    app.setApplicationVersion("0.6.0-beta")
 
     # Load Atkinson Hyperlegible font
-    font_dir = Path(__file__).parent.parent / "font"
+    font_dir = _base_dir() / "font"
     if font_dir.exists():
         for ttf in font_dir.glob("*.ttf"):
             QFontDatabase.addApplicationFont(str(ttf))
@@ -34,7 +34,7 @@ def main():
     locale = QLocale.system()
 
     # Try to load translation for system locale
-    translations_path = Path(__file__).parent / "resources" / "translations"
+    translations_path = _base_dir() / "dorothy" / "resources" / "translations"
     if translator.load(locale, "dorothy", "_", str(translations_path)):
         app.installTranslator(translator)
 

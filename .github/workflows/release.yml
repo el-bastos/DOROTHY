@@ -1,0 +1,117 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install . pyinstaller
+
+      - name: Build with PyInstaller
+        run: pyinstaller dorothy.spec
+
+      - name: Package macOS app
+        run: |
+          cd dist
+          zip -r ../Dorothy-macOS.zip Dorothy.app
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dorothy-macOS
+          path: Dorothy-macOS.zip
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install . pyinstaller
+
+      - name: Build with PyInstaller
+        run: pyinstaller dorothy.spec
+
+      - name: Package Windows build
+        run: Compress-Archive -Path dist\Dorothy -DestinationPath Dorothy-Windows.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dorothy-Windows
+          path: Dorothy-Windows.zip
+
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libxkbcommon0 libxcb-cursor0
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install . pyinstaller
+
+      - name: Build with PyInstaller
+        run: pyinstaller dorothy.spec
+
+      - name: Package Linux build
+        run: tar -czf Dorothy-Linux.tar.gz -C dist Dorothy
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dorothy-Linux
+          path: Dorothy-Linux.tar.gz
+
+  release:
+    needs: [build-macos, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            artifacts/Dorothy-macOS/Dorothy-macOS.zip
+            artifacts/Dorothy-Windows/Dorothy-Windows.zip
+            artifacts/Dorothy-Linux/Dorothy-Linux.tar.gz

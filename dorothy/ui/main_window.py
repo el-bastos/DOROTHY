@@ -31,6 +31,7 @@ from PyQt6.QtCore import Qt, QCoreApplication, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QDesktopServices, QPixmap, QIcon
 from PyQt6.QtCore import QUrl
 
+from dorothy import _base_dir
 from dorothy.core.cod_search import CODSearch, MoleculeResult
 from dorothy.core.cif_parser import MoleculeStructure
 from dorothy.core.xtb_manager import is_xtb_installed, download_xtb, get_download_url, get_xtb_install_instructions, verify_xtb_installation
@@ -718,7 +719,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Dorothy")
         self.setMinimumSize(800, 600)
-        icon_path = Path(__file__).parent.parent.parent / "logo" / "dorothy_logo_icon.png"
+        icon_path = _base_dir() / "logo" / "dorothy_logo_icon.png"
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
 
@@ -808,7 +809,7 @@ class MainWindow(QMainWindow):
 
         # Logo
         logo_label = QLabel()
-        logo_path = Path(__file__).parent.parent.parent / "logo" / "dorothy_logo.png"
+        logo_path = _base_dir() / "logo" / "dorothy_logo.png"
         if logo_path.exists():
             pixmap = QPixmap(str(logo_path))
             scaled = pixmap.scaledToWidth(350, Qt.TransformationMode.SmoothTransformation)

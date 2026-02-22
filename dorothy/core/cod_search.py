@@ -48,7 +48,8 @@ class CODSearch:
         # Load local examples
         if examples_dir is None:
             # Default: look for examples folder relative to package
-            examples_dir = Path(__file__).parent.parent.parent / "examples"
+            from dorothy import _base_dir
+            examples_dir = _base_dir() / "examples"
 
         self._load_local_examples(examples_dir)
 
