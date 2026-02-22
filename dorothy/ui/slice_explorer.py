@@ -27,6 +27,13 @@ from dorothy.core.constants import (
     CONTOUR_LEVELS_BASE,
     SLICE_ATOM_THICKNESS,
 )
+from dorothy.ui import styles as S
+from PyQt6.QtGui import QFont
+
+def _font(size: int = S.SIZE_BODY, bold: bool = False) -> QFont:
+    f = QFont(S.FONT_FAMILY, size)
+    f.setBold(bold)
+    return f
 
 
 class Slice2DPreviewDialog(QDialog):
@@ -47,7 +54,8 @@ class Slice2DPreviewDialog(QDialog):
 
         # Info label
         self.info_label = QLabel()
-        self.info_label.setStyleSheet("font-size: 10pt; color: #666;")
+        self.info_label.setFont(_font(S.SIZE_SMALL))
+        self.info_label.setStyleSheet(S.label_secondary())
         layout.addWidget(self.info_label)
 
         # Close button
@@ -123,7 +131,7 @@ class Slice2DPreviewDialog(QDialog):
                 # Draw positive contours
                 valid_pos = [l for l in levels_pos if l < slice_data.max()]
                 if valid_pos:
-                    color = 'black' if color_mode == 'bw' else '#2563eb'
+                    color = 'black' if color_mode == 'bw' else '#e05a2b'
                     ax.contour(X, Y, slice_data, levels=valid_pos, colors=color, linewidths=1.0)
 
                 # Draw negative contours
@@ -146,7 +154,7 @@ class Slice2DPreviewDialog(QDialog):
                     end = max_val * 0.8
                     if start < end:
                         levels = list(np.linspace(start, end, n_contours))
-                        color = 'black' if color_mode == 'bw' else '#2563eb'
+                        color = 'black' if color_mode == 'bw' else '#e05a2b'
                         ax.contour(X, Y, slice_data, levels=levels, colors=color, linewidths=1.0)
 
                 self.info_label.setText(f"Promolecule density at z = {z_coord:.2f} Å")
@@ -450,7 +458,7 @@ class SliceExplorerCanvas(FigureCanvas):
                         levels=valid_levels,
                         zdir='z',
                         offset=z_coord,
-                        colors='#000000' if self._color_mode == 'bw' else '#2563eb',
+                        colors='#000000' if self._color_mode == 'bw' else '#e05a2b',
                         linewidths=2.0 if is_highlighted else 0.6,
                         alpha=1.0 if is_highlighted else 0.4
                     )
@@ -491,7 +499,7 @@ class SliceExplorerCanvas(FigureCanvas):
 
         # Choose color based on density
         if is_highlighted:
-            color = '#2563eb' if self._color_mode == 'color' else '#666666'
+            color = '#e05a2b' if self._color_mode == 'color' else '#666666'
             face_alpha = 0.3
         else:
             color = '#cccccc'
@@ -1047,6 +1055,7 @@ class SliceExplorer(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._promolecule_cube: DensityCube | None = None
+        self._molecular_cube: DensityCube | None = None
         self._deformation_cube: DensityCube | None = None
 
         # Animation state
@@ -1080,12 +1089,15 @@ class SliceExplorer(QWidget):
         type_group = QHBoxLayout()
         type_group.setSpacing(6)
         type_label = QLabel("Density:")
-        type_label.setStyleSheet("font-weight: bold;")
+        type_label.setFont(_font(bold=True))
+        type_label.setStyleSheet(S.label_title())
         type_label.setToolTip("Switch between promolecule and deformation density")
         type_group.addWidget(type_label)
         self.density_combo = QComboBox()
-        self.density_combo.addItems(["Promolecule", "Deformation"])
-        self.density_combo.setToolTip("Promolecule: atom positions | Deformation: bonding effects")
+        self.density_combo.setFont(_font())
+        self.density_combo.setStyleSheet(S.combo_style())
+        self.density_combo.addItems(["Promolecule", "Molecular", "Deformation"])
+        self.density_combo.setToolTip("Promolecule: isolated atoms | Molecular: real density (xTB) | Deformation: bonding effects")
         self.density_combo.currentIndexChanged.connect(self._on_density_type_changed)
         type_group.addWidget(self.density_combo)
         row1.addLayout(type_group)
@@ -1094,15 +1106,16 @@ class SliceExplorer(QWidget):
         render_group = QHBoxLayout()
         render_group.setSpacing(2)
         self.contour_mode_btn = QPushButton("Contour")
+        self.contour_mode_btn.setFont(_font())
         self.contour_mode_btn.setCheckable(True)
         self.contour_mode_btn.setChecked(True)
         self.contour_mode_btn.setToolTip("Show contour lines (good for printing)")
-        self.contour_mode_btn.setMaximumWidth(60)
+        self.contour_mode_btn.setStyleSheet(S.btn_toggle())
         self.heatmap_mode_btn = QPushButton("Heatmap")
+        self.heatmap_mode_btn.setFont(_font())
         self.heatmap_mode_btn.setCheckable(True)
         self.heatmap_mode_btn.setToolTip("Show color gradient (good for screen visualization)")
-        self.heatmap_mode_btn.setMaximumWidth(60)
-        # Button group for exclusive selection
+        self.heatmap_mode_btn.setStyleSheet(S.btn_toggle())
         self.render_mode_group = QButtonGroup(self)
         self.render_mode_group.addButton(self.contour_mode_btn, 0)
         self.render_mode_group.addButton(self.heatmap_mode_btn, 1)
@@ -1111,19 +1124,20 @@ class SliceExplorer(QWidget):
         render_group.addWidget(self.heatmap_mode_btn)
         row1.addLayout(render_group)
 
-        # Color mode toggle buttons (only for contour mode)
+        # Color mode toggle buttons
         color_group = QHBoxLayout()
         color_group.setSpacing(2)
         self.bw_btn = QPushButton("B&&W")
+        self.bw_btn.setFont(_font())
         self.bw_btn.setCheckable(True)
         self.bw_btn.setChecked(True)
         self.bw_btn.setToolTip("Black and white contours")
-        self.bw_btn.setMaximumWidth(45)
+        self.bw_btn.setStyleSheet(S.btn_toggle())
         self.color_btn = QPushButton("Color")
+        self.color_btn.setFont(_font())
         self.color_btn.setCheckable(True)
         self.color_btn.setToolTip("Colored contours (blue=positive, red=negative)")
-        self.color_btn.setMaximumWidth(50)
-        # Button group for exclusive selection
+        self.color_btn.setStyleSheet(S.btn_toggle())
         self.color_button_group = QButtonGroup(self)
         self.color_button_group.addButton(self.bw_btn, 0)
         self.color_button_group.addButton(self.color_btn, 1)
@@ -1140,24 +1154,32 @@ class SliceExplorer(QWidget):
 
         # Display options (checkboxes)
         self.contours_check = QCheckBox("Contours")
+        self.contours_check.setFont(_font())
+        self.contours_check.setStyleSheet(S.checkbox_style())
         self.contours_check.setChecked(True)
         self.contours_check.setToolTip("Show/hide contour lines")
         self.contours_check.stateChanged.connect(self._on_contours_toggled)
         row1.addWidget(self.contours_check)
 
         self.bonds_check = QCheckBox("Bonds")
+        self.bonds_check.setFont(_font())
+        self.bonds_check.setStyleSheet(S.checkbox_style())
         self.bonds_check.setChecked(True)
         self.bonds_check.setToolTip("Show/hide molecular bonds")
         self.bonds_check.stateChanged.connect(self._on_bonds_toggled)
         row1.addWidget(self.bonds_check)
 
         self.single_slice_check = QCheckBox("Single")
+        self.single_slice_check.setFont(_font())
+        self.single_slice_check.setStyleSheet(S.checkbox_style())
         self.single_slice_check.setChecked(False)
         self.single_slice_check.setToolTip("Show only the selected slice, hide all others")
         self.single_slice_check.stateChanged.connect(self._on_single_slice_toggled)
         row1.addWidget(self.single_slice_check)
 
         self.density_info_check = QCheckBox("Info")
+        self.density_info_check.setFont(_font())
+        self.density_info_check.setStyleSheet(S.checkbox_style())
         self.density_info_check.setChecked(False)
         self.density_info_check.setToolTip("Show electron density statistics")
         self.density_info_check.stateChanged.connect(self._on_density_info_toggled)
@@ -1173,17 +1195,21 @@ class SliceExplorer(QWidget):
         spacing_group = QHBoxLayout()
         spacing_group.setSpacing(4)
         spacing_label = QLabel("Spacing:")
+        spacing_label.setFont(_font())
+        spacing_label.setStyleSheet(S.label_title())
         spacing_label.setToolTip("Adjust contour level spacing")
         spacing_group.addWidget(spacing_label)
         self.contour_scale_slider = QSlider(Qt.Orientation.Horizontal)
-        self.contour_scale_slider.setMinimum(25)  # 0.25x
-        self.contour_scale_slider.setMaximum(200)  # 2.0x
-        self.contour_scale_slider.setValue(100)  # 1.0x (default)
+        self.contour_scale_slider.setMinimum(25)
+        self.contour_scale_slider.setMaximum(200)
+        self.contour_scale_slider.setValue(100)
         self.contour_scale_slider.setFixedWidth(80)
         self.contour_scale_slider.setToolTip("Left = more contours (tighter), Right = fewer contours (looser)")
         self.contour_scale_slider.valueChanged.connect(self._on_contour_scale_changed)
         spacing_group.addWidget(self.contour_scale_slider)
         self.contour_scale_label = QLabel("1.0x")
+        self.contour_scale_label.setFont(_font())
+        self.contour_scale_label.setStyleSheet(S.label_secondary())
         self.contour_scale_label.setMinimumWidth(30)
         spacing_group.addWidget(self.contour_scale_label)
         row1.addLayout(spacing_group)
@@ -1199,7 +1225,8 @@ class SliceExplorer(QWidget):
         slice_group = QHBoxLayout()
         slice_group.setSpacing(6)
         slice_label = QLabel("Slice:")
-        slice_label.setStyleSheet("font-weight: bold;")
+        slice_label.setFont(_font(bold=True))
+        slice_label.setStyleSheet(S.label_title())
         slice_label.setToolTip("Navigate through density slices")
         slice_group.addWidget(slice_label)
 
@@ -1215,6 +1242,8 @@ class SliceExplorer(QWidget):
         slice_group.addWidget(self.slice_slider, stretch=1)
 
         self.slice_label = QLabel("8/15")
+        self.slice_label.setFont(_font())
+        self.slice_label.setStyleSheet(S.label_secondary())
         self.slice_label.setMinimumWidth(90)
         self.slice_label.setToolTip("Current slice / total slices (Z-coordinate)")
         slice_group.addWidget(self.slice_label)
@@ -1228,19 +1257,23 @@ class SliceExplorer(QWidget):
 
         # Zoom controls
         zoom_group = QHBoxLayout()
-        zoom_group.setSpacing(2)
+        zoom_group.setSpacing(4)
         zoom_label = QLabel("Zoom:")
+        zoom_label.setFont(_font())
+        zoom_label.setStyleSheet(S.label_title())
         zoom_label.setToolTip("Zoom in/out (or use scroll wheel)")
         zoom_group.addWidget(zoom_label)
 
         zoom_in_btn = QPushButton("+")
-        zoom_in_btn.setFixedWidth(28)
+        zoom_in_btn.setFont(_font())
+        zoom_in_btn.setStyleSheet(S.btn_icon())
         zoom_in_btn.setToolTip("Zoom in")
         zoom_in_btn.clicked.connect(self.canvas.zoom_in)
         zoom_group.addWidget(zoom_in_btn)
 
         zoom_out_btn = QPushButton("-")
-        zoom_out_btn.setFixedWidth(28)
+        zoom_out_btn.setFont(_font())
+        zoom_out_btn.setStyleSheet(S.btn_icon())
         zoom_out_btn.setToolTip("Zoom out")
         zoom_out_btn.clicked.connect(self.canvas.zoom_out)
         zoom_group.addWidget(zoom_out_btn)
@@ -1248,31 +1281,37 @@ class SliceExplorer(QWidget):
 
         # Rotation controls
         rotate_group = QHBoxLayout()
-        rotate_group.setSpacing(2)
+        rotate_group.setSpacing(4)
         rotate_label = QLabel("Rotate:")
+        rotate_label.setFont(_font())
+        rotate_label.setStyleSheet(S.label_title())
         rotate_label.setToolTip("Rotate view (or drag mouse on canvas)")
         rotate_group.addWidget(rotate_label)
 
         rotate_left_btn = QPushButton("\u2190")
-        rotate_left_btn.setFixedWidth(28)
+        rotate_left_btn.setFont(_font())
+        rotate_left_btn.setStyleSheet(S.btn_icon())
         rotate_left_btn.setToolTip("Rotate left")
         rotate_left_btn.clicked.connect(self.canvas.rotate_left)
         rotate_group.addWidget(rotate_left_btn)
 
         rotate_right_btn = QPushButton("\u2192")
-        rotate_right_btn.setFixedWidth(28)
+        rotate_right_btn.setFont(_font())
+        rotate_right_btn.setStyleSheet(S.btn_icon())
         rotate_right_btn.setToolTip("Rotate right")
         rotate_right_btn.clicked.connect(self.canvas.rotate_right)
         rotate_group.addWidget(rotate_right_btn)
 
         rotate_up_btn = QPushButton("\u2191")
-        rotate_up_btn.setFixedWidth(28)
+        rotate_up_btn.setFont(_font())
+        rotate_up_btn.setStyleSheet(S.btn_icon())
         rotate_up_btn.setToolTip("Rotate up")
         rotate_up_btn.clicked.connect(self.canvas.rotate_up)
         rotate_group.addWidget(rotate_up_btn)
 
         rotate_down_btn = QPushButton("\u2193")
-        rotate_down_btn.setFixedWidth(28)
+        rotate_down_btn.setFont(_font())
+        rotate_down_btn.setStyleSheet(S.btn_icon())
         rotate_down_btn.setToolTip("Rotate down")
         rotate_down_btn.clicked.connect(self.canvas.rotate_down)
         rotate_group.addWidget(rotate_down_btn)
@@ -1280,6 +1319,8 @@ class SliceExplorer(QWidget):
 
         # Reset View button
         reset_btn = QPushButton("Reset View")
+        reset_btn.setFont(_font())
+        reset_btn.setStyleSheet(S.btn_secondary())
         reset_btn.setToolTip("Reset zoom and rotation to default")
         reset_btn.clicked.connect(self.canvas.reset_view)
         row2.addWidget(reset_btn)
@@ -1292,13 +1333,17 @@ class SliceExplorer(QWidget):
 
         # View 2D button
         self.view_2d_btn = QPushButton("View 2D")
+        self.view_2d_btn.setFont(_font())
+        self.view_2d_btn.setStyleSheet(S.btn_secondary())
         self.view_2d_btn.setToolTip("Show current slice as a 2D contour plot")
         self.view_2d_btn.clicked.connect(self._show_2d_preview)
         row2.addWidget(self.view_2d_btn)
 
-        # Animate button (morph between promolecule and deformation)
+        # Animate button
         self.animate_btn = QPushButton("Animate")
-        self.animate_btn.setToolTip("Animate transition between promolecule and deformation density")
+        self.animate_btn.setFont(_font())
+        self.animate_btn.setStyleSheet(S.btn_toggle())
+        self.animate_btn.setToolTip("Animate transition from promolecule to molecular density")
         self.animate_btn.setCheckable(True)
         self.animate_btn.clicked.connect(self._toggle_animation)
         row2.addWidget(self.animate_btn)
@@ -1306,10 +1351,12 @@ class SliceExplorer(QWidget):
         layout.addLayout(row2)
 
     def set_density_cubes(self, promolecule: DensityCube | None = None,
+                          molecular: DensityCube | None = None,
                           deformation: DensityCube | None = None,
                           n_slices: int = 15):
         """Set the density cubes to visualize."""
         self._promolecule_cube = promolecule
+        self._molecular_cube = molecular
         self._deformation_cube = deformation
 
         # Update slice slider
@@ -1321,12 +1368,16 @@ class SliceExplorer(QWidget):
         self.density_combo.clear()
         if promolecule is not None:
             self.density_combo.addItem("Promolecule")
+        if molecular is not None:
+            self.density_combo.addItem("Molecular")
         if deformation is not None:
             self.density_combo.addItem("Deformation")
 
         # Show first available density
         if promolecule is not None:
             self.canvas.set_density_cube(promolecule, "promolecule")
+        elif molecular is not None:
+            self.canvas.set_density_cube(molecular, "molecular")
         elif deformation is not None:
             self.canvas.set_density_cube(deformation, "deformation")
 
@@ -1337,6 +1388,8 @@ class SliceExplorer(QWidget):
         text = self.density_combo.currentText().lower()
         if text == "promolecule" and self._promolecule_cube:
             self.canvas.set_density_cube(self._promolecule_cube, "promolecule")
+        elif text == "molecular" and self._molecular_cube:
+            self.canvas.set_density_cube(self._molecular_cube, "molecular")
         elif text == "deformation" and self._deformation_cube:
             self.canvas.set_density_cube(self._deformation_cube, "deformation")
 
@@ -1484,7 +1537,8 @@ class SliceExplorer(QWidget):
         )
 
         # Update display
-        density_type = "deformation" if t > 0.5 else "promolecule"
+        # At t=0 it's promolecule, at t=1 it's promolecule+deformation = molecular
+        density_type = "molecular" if t > 0.5 else "promolecule"
         self.canvas.set_density_cube(blended_cube, density_type)
 
         # Update combo to show progress
@@ -1492,8 +1546,7 @@ class SliceExplorer(QWidget):
         if t < 0.5:
             self.density_combo.setCurrentText("Promolecule")
         else:
-            # Try to select Deformation if available
-            idx = self.density_combo.findText("Deformation")
+            idx = self.density_combo.findText("Molecular")
             if idx >= 0:
                 self.density_combo.setCurrentIndex(idx)
         self.density_combo.blockSignals(False)

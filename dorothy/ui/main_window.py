@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
 )
 from PyQt6.QtCore import Qt, QCoreApplication, QThread, pyqtSignal
-from PyQt6.QtGui import QFont, QDesktopServices, QPixmap
+from PyQt6.QtGui import QFont, QDesktopServices, QPixmap, QIcon
 from PyQt6.QtCore import QUrl
 
 from dorothy.core.cod_search import CODSearch, MoleculeResult
@@ -37,7 +37,22 @@ from dorothy.core.xtb_manager import is_xtb_installed, download_xtb, get_downloa
 from dorothy.core.density import create_density_cube_from_structure
 from dorothy.ui.molecule_viewer import MoleculeViewer
 from dorothy.ui.slice_explorer import SliceExplorer
+from dorothy.ui import styles as S
 
+
+# =============================================================================
+# Font helper — uses the design system font at a given size/weight
+# =============================================================================
+
+def _font(size: int = S.SIZE_BODY, bold: bool = False) -> QFont:
+    f = QFont(S.FONT_FAMILY, size)
+    f.setBold(bold)
+    return f
+
+
+# =============================================================================
+# Worker threads (unchanged logic)
+# =============================================================================
 
 class SearchWorker(QThread):
     """Background thread for COD search."""
@@ -87,7 +102,7 @@ class XtbDownloadWorker(QThread):
 class XtbDensityWorker(QThread):
     """Background thread for xTB density calculation."""
     progress = pyqtSignal(str)  # status message
-    finished = pyqtSignal(object, object)  # promolecule_cube, deformation_cube
+    finished = pyqtSignal(object, object, object)  # promolecule, molecular, deformation
 
     def __init__(self, structure: MoleculeStructure, plane_definition=None):
         super().__init__()
@@ -104,11 +119,10 @@ class XtbDensityWorker(QThread):
         import tempfile
 
         promolecule = None
+        molecular = None
         deformation = None
 
         try:
-            # Always create promolecule (fast) as fallback
-            # Use plane rotation if provided, otherwise use principal axes
             self.progress.emit("Generating promolecule density...")
             promolecule = create_density_cube_from_structure(
                 self.structure,
@@ -117,7 +131,6 @@ class XtbDensityWorker(QThread):
                 plane_definition=self.plane_definition
             )
 
-            # Try xTB if available
             if is_xtb_installed():
                 self.progress.emit("Running xTB calculation...")
                 with tempfile.TemporaryDirectory() as tmp_dir:
@@ -132,8 +145,6 @@ class XtbDensityWorker(QThread):
                         self.progress.emit("Processing density data...")
                         molecular = parse_cube_file(cube_path)
                         if molecular:
-                            # Get both promolecule and deformation on the same grid
-                            # This ensures they can be blended for animation
                             promolecule, deformation = calculate_deformation_density(
                                 molecular,
                                 self.structure
@@ -144,8 +155,12 @@ class XtbDensityWorker(QThread):
         except Exception as e:
             self.progress.emit(f"Error: {e}")
 
-        self.finished.emit(promolecule, deformation)
+        self.finished.emit(promolecule, molecular, deformation)
 
+
+# =============================================================================
+# xTB Download Dialog
+# =============================================================================
 
 class XtbDownloadDialog(QDialog):
     """Dialog for downloading/installing xTB."""
@@ -162,15 +177,11 @@ class XtbDownloadDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(15)
 
-        # Title
         title = QLabel("xTB Not Installed")
-        title_font = QFont()
-        title_font.setPointSize(14)
-        title_font.setBold(True)
-        title.setFont(title_font)
+        title.setFont(_font(S.SIZE_SUBTITLE, bold=True))
+        title.setStyleSheet(S.label_title())
         layout.addWidget(title)
 
-        # Explanation
         explanation = QLabel(
             "xTB is required for deformation density calculation.\n\n"
             "Without xTB, only promolecule density (atomic positions) "
@@ -178,87 +189,65 @@ class XtbDownloadDialog(QDialog):
             "showing chemical bonding."
         )
         explanation.setWordWrap(True)
-        explanation.setStyleSheet("color: #666;")
+        explanation.setFont(_font())
+        explanation.setStyleSheet(S.label_secondary())
         layout.addWidget(explanation)
 
-        # Installation instructions
         instructions = get_xtb_install_instructions()
         install_label = QLabel(instructions)
         install_label.setWordWrap(True)
         install_label.setStyleSheet(
-            "background-color: #f5f5f5; padding: 10px; "
-            "font-family: monospace; border-radius: 4px;"
+            f"background-color: {S.BG_CARD}; padding: 10px; "
+            f"font-family: monospace; border-radius: 6px; color: {S.TEXT};"
         )
         install_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(install_label)
 
-        # Progress bar (for auto-download, hidden initially)
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
         self.progress_bar.setMaximum(100)
+        self.progress_bar.setStyleSheet(S.progress_bar())
         self.progress_bar.hide()
         layout.addWidget(self.progress_bar)
 
-        # Status label
         self.status_label = QLabel()
-        self.status_label.setStyleSheet("color: #666;")
+        self.status_label.setFont(_font())
+        self.status_label.setStyleSheet(S.label_secondary())
         self.status_label.hide()
         layout.addWidget(self.status_label)
 
-        # Buttons
         button_layout = QHBoxLayout()
 
         self.skip_btn = QPushButton("Skip (Promolecule Only)")
+        self.skip_btn.setFont(_font())
+        self.skip_btn.setStyleSheet(S.btn_secondary())
         self.skip_btn.clicked.connect(self.reject)
         button_layout.addWidget(self.skip_btn)
 
         if self.can_auto_download:
             self.download_btn = QPushButton("Download xTB")
-            self.download_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #2563eb;
-                    color: white;
-                    font-weight: bold;
-                    padding: 8px 16px;
-                    border-radius: 4px;
-                }
-                QPushButton:hover {
-                    background-color: #1d4ed8;
-                }
-            """)
+            self.download_btn.setFont(_font(bold=True))
+            self.download_btn.setStyleSheet(S.btn_primary())
             self.download_btn.clicked.connect(self._start_download)
             button_layout.addWidget(self.download_btn)
         else:
-            # No auto-download available, just show "I've Installed It" button
             self.check_btn = QPushButton("I've Installed It")
-            self.check_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #2563eb;
-                    color: white;
-                    font-weight: bold;
-                    padding: 8px 16px;
-                    border-radius: 4px;
-                }
-                QPushButton:hover {
-                    background-color: #1d4ed8;
-                }
-            """)
+            self.check_btn.setFont(_font(bold=True))
+            self.check_btn.setStyleSheet(S.btn_primary())
             self.check_btn.clicked.connect(self._check_installation)
             button_layout.addWidget(self.check_btn)
 
         layout.addLayout(button_layout)
 
     def _check_installation(self):
-        """Check if user has installed xTB."""
         if is_xtb_installed():
             self.accept()
         else:
             self.status_label.show()
             self.status_label.setText("xTB not found. Please install it and try again.")
-            self.status_label.setStyleSheet("color: #dc2626;")
+            self.status_label.setStyleSheet(S.label_error())
 
     def _start_download(self):
-        """Start the xTB download."""
         self.download_btn.setEnabled(False)
         self.skip_btn.setEnabled(False)
         self.progress_bar.show()
@@ -272,7 +261,6 @@ class XtbDownloadDialog(QDialog):
         self.download_worker.start()
 
     def _on_progress(self, downloaded: int, total: int):
-        """Handle download progress."""
         if total > 0:
             percent = int(100 * downloaded / total)
             self.progress_bar.setValue(percent)
@@ -281,17 +269,20 @@ class XtbDownloadDialog(QDialog):
             self.status_label.setText(f"Downloading... {mb_downloaded:.1f} / {mb_total:.1f} MB")
 
     def _on_finished(self, success: bool):
-        """Handle download completion."""
         if success:
             self.status_label.setText("Download complete!")
-            self.status_label.setStyleSheet("color: #16a34a;")
+            self.status_label.setStyleSheet(S.label_success())
             self.accept()
         else:
             self.status_label.setText("Download failed. Please install manually.")
-            self.status_label.setStyleSheet("color: #dc2626;")
+            self.status_label.setStyleSheet(S.label_error())
             self.download_btn.setEnabled(True)
             self.skip_btn.setEnabled(True)
 
+
+# =============================================================================
+# Main Window
+# =============================================================================
 
 class MainWindow(QMainWindow):
     """Main application window for Dorothy."""
@@ -300,8 +291,12 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Dorothy")
         self.setMinimumSize(800, 600)
+        icon_path = Path(__file__).parent.parent.parent / "logo" / "dorothy_logo_icon.png"
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
+        self.showMaximized()
 
-        self.searcher = CODSearch()  # Single instance to cache local molecules
+        self.searcher = CODSearch()
         self.search_worker: SearchWorker | None = None
         self.generation_worker: GenerationWorker | None = None
         self.xtb_density_worker: XtbDensityWorker | None = None
@@ -309,22 +304,19 @@ class MainWindow(QMainWindow):
         self.selected_molecule: MoleculeResult | None = None
         self.selected_structure: MoleculeStructure | None = None
         self.last_result: GenerationResult | None = None
-
-        # Selection manager for plane definition
         self.selection_manager = None
 
-        # Create central widget and main layout
         central_widget = QWidget()
+        central_widget.setObjectName("dorothy_central")
+        central_widget.setStyleSheet("#dorothy_central { background-color: #ffffff; }")
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # Create stacked widget for different screens
         self.stacked_widget = QStackedWidget()
         main_layout.addWidget(self.stacked_widget)
 
-        # Add screens
         self.home_screen = self._create_home_screen()
         self.results_screen = self._create_results_screen()
         self.preview_screen = self._create_preview_screen()
@@ -336,128 +328,155 @@ class MainWindow(QMainWindow):
         self.stacked_widget.addWidget(self.processing_screen)
         self.stacked_widget.addWidget(self.complete_screen)
 
-        # Show home screen
         self.stacked_widget.setCurrentWidget(self.home_screen)
 
+    # =========================================================================
+    # Home Screen
+    # =========================================================================
+
     def _create_home_screen(self) -> QWidget:
-        """Create the home/search screen."""
         screen = QWidget()
+        screen.setObjectName("home_screen")
+        screen.setStyleSheet("#home_screen { background-color: #ffffff; }")
         layout = QVBoxLayout(screen)
         layout.setContentsMargins(40, 40, 40, 40)
-        layout.setSpacing(20)
+        layout.setSpacing(0)
+
+        layout.addStretch(2)
 
         # Logo
         logo_label = QLabel()
         logo_path = Path(__file__).parent.parent.parent / "logo" / "dorothy_logo.png"
         if logo_path.exists():
             pixmap = QPixmap(str(logo_path))
-            # Scale to reasonable size while keeping aspect ratio
-            scaled = pixmap.scaledToWidth(400, Qt.TransformationMode.SmoothTransformation)
+            scaled = pixmap.scaledToWidth(350, Qt.TransformationMode.SmoothTransformation)
             logo_label.setPixmap(scaled)
         else:
-            # Fallback to text if logo not found
             logo_label.setText(self.tr("Dorothy"))
-            title_font = QFont()
-            title_font.setPointSize(32)
-            title_font.setBold(True)
-            logo_label.setFont(title_font)
+            logo_label.setFont(_font(32, bold=True))
         logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(logo_label)
 
+        layout.addSpacing(8)
+
         # Subtitle
-        subtitle = QLabel(self.tr("Crystallography Teaching Tool"))
-        subtitle_font = QFont()
-        subtitle_font.setPointSize(12)
-        subtitle.setFont(subtitle_font)
+        subtitle = QLabel(self.tr("A tool for discovery and learning"))
+        subtitle.setFont(_font(16))
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        subtitle.setStyleSheet("color: #666;")
+        subtitle.setStyleSheet(f"color: {S.TEXT_SECONDARY};")
         layout.addWidget(subtitle)
 
-        layout.addSpacing(40)
+        layout.addSpacing(30)
 
-        # Search section
-        search_container = QWidget()
-        search_layout = QVBoxLayout(search_container)
-        search_layout.setSpacing(10)
+        # Google-style search bar — single wide pill, centered
+        search_row = QHBoxLayout()
+        search_row.setContentsMargins(0, 0, 0, 0)
+        search_row.addStretch(1)
 
-        # Search input
-        search_input_layout = QHBoxLayout()
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText(self.tr("Search molecule..."))
-        self.search_input.setMinimumHeight(40)
-        search_input_font = QFont()
-        search_input_font.setPointSize(12)
-        self.search_input.setFont(search_input_font)
+        self.search_input.setPlaceholderText(self.tr("Search molecule (e.g. aspirin, benzene, caffeine)..."))
+        self.search_input.setFont(_font(16))
+        self.search_input.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: white;
+                color: {S.TEXT};
+                border: 1px solid {S.BORDER};
+                border-radius: 24px;
+                padding: 12px 24px;
+                font-size: 16pt;
+                font-family: "{S.FONT_FAMILY}";
+            }}
+            QLineEdit:focus {{
+                border-color: {S.ACCENT};
+                border-width: 2px;
+            }}
+        """)
+        self.search_input.setFixedWidth(580)
         self.search_input.returnPressed.connect(self._on_search)
-        search_input_layout.addWidget(self.search_input)
+        search_row.addWidget(self.search_input)
 
         self.search_button = QPushButton(self.tr("Search"))
-        self.search_button.setMinimumHeight(40)
-        self.search_button.setMinimumWidth(100)
+        self.search_button.setObjectName("search_btn")
+        self.search_button.setStyleSheet(f"""
+            #search_btn {{
+                background-color: {S.ACCENT};
+                color: white;
+                border: 2px solid {S.ACCENT};
+                border-radius: 24px;
+                padding: 12px 28px;
+                font-size: 16pt;
+                font-family: "{S.FONT_FAMILY}";
+                font-weight: bold;
+            }}
+            #search_btn:hover {{
+                background-color: {S.ACCENT_HOVER};
+                border-color: {S.ACCENT_HOVER};
+            }}
+            #search_btn:pressed {{
+                background-color: {S.ACCENT_PRESSED};
+                border-color: {S.ACCENT_PRESSED};
+            }}
+        """)
         self.search_button.clicked.connect(self._on_search)
-        search_input_layout.addWidget(self.search_button)
+        search_row.addSpacing(10)
+        search_row.addWidget(self.search_button)
 
-        search_layout.addLayout(search_input_layout)
+        search_row.addStretch(1)
+        layout.addLayout(search_row)
 
-        # Status label (for showing searching... or errors)
+        layout.addSpacing(12)
+
+        # Status label (shows "Searching..." etc.)
         self.status_label = QLabel("")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setStyleSheet("color: #666;")
-        search_layout.addWidget(self.status_label)
+        self.status_label.setFont(_font(S.SIZE_SUBTITLE))
+        self.status_label.setStyleSheet(f"color: {S.TEXT_SECONDARY};")
+        layout.addWidget(self.status_label)
 
-        # Example molecules
-        examples = QLabel(
-            self.tr("Examples: aspirin · benzene · caffeine · urea · naphthalene")
-        )
-        examples.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        examples.setStyleSheet("color: #888;")
-        search_layout.addWidget(examples)
-
-        layout.addWidget(search_container)
-
-        # Add stretch to push content to top
-        layout.addStretch()
+        layout.addStretch(3)
 
         # Footer
         footer = QLabel(
-            self.tr(
-                "Honoring Dorothy Hodgkin's pioneering work in X-ray crystallography"
-            )
+            self.tr("Honoring Dorothy Hodgkin's pioneering work in X-ray crystallography")
         )
         footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        footer.setStyleSheet("color: #999; font-size: 10pt;")
+        footer.setFont(_font(13))
+        footer.setStyleSheet(f"color: {S.TEXT_MUTED};")
         layout.addWidget(footer)
 
         return screen
 
+    # =========================================================================
+    # Results Screen
+    # =========================================================================
+
     def _create_results_screen(self) -> QWidget:
-        """Create the search results screen."""
         screen = QWidget()
+        screen.setObjectName("results_screen")
+        screen.setStyleSheet("#results_screen { background-color: #ffffff; }")
         layout = QVBoxLayout(screen)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(10)
 
-        # Header with back button
         header = QHBoxLayout()
         back_btn = QPushButton(self.tr("< Back"))
+        back_btn.setFont(_font())
+        back_btn.setStyleSheet(S.btn_secondary())
         back_btn.clicked.connect(self._go_home)
-        back_btn.setMaximumWidth(80)
         header.addWidget(back_btn)
 
         self.results_title = QLabel(self.tr("Results"))
-        title_font = QFont()
-        title_font.setPointSize(18)
-        title_font.setBold(True)
-        self.results_title.setFont(title_font)
+        self.results_title.setFont(_font(S.SIZE_TITLE, bold=True))
+        self.results_title.setStyleSheet(S.label_title())
         header.addWidget(self.results_title)
         header.addStretch()
 
         self.online_status = QLabel()
+        self.online_status.setFont(_font(S.SIZE_SMALL))
         header.addWidget(self.online_status)
 
         layout.addLayout(header)
 
-        # Scrollable results area
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -472,88 +491,67 @@ class MainWindow(QMainWindow):
 
         return screen
 
+    # =========================================================================
+    # Preview Screen
+    # =========================================================================
+
     def _create_preview_screen(self) -> QWidget:
-        """Create the molecule preview screen with settings."""
         screen = QWidget()
+        screen.setObjectName("preview_screen")
+        screen.setStyleSheet("#preview_screen { background-color: #ffffff; }")
         layout = QVBoxLayout(screen)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
 
-        # Header with back button
+        # Header
         header = QHBoxLayout()
         back_btn = QPushButton(self.tr("< Back"))
+        back_btn.setFont(_font())
+        back_btn.setStyleSheet(S.btn_secondary())
         back_btn.clicked.connect(self._go_to_results)
-        back_btn.setMaximumWidth(80)
         header.addWidget(back_btn)
 
         self.preview_title = QLabel(self.tr("Molecule"))
-        title_font = QFont()
-        title_font.setPointSize(18)
-        title_font.setBold(True)
-        self.preview_title.setFont(title_font)
+        self.preview_title.setFont(_font(S.SIZE_TITLE, bold=True))
+        self.preview_title.setStyleSheet(S.label_title())
         header.addWidget(self.preview_title)
         header.addStretch()
 
         layout.addLayout(header)
 
-        # Main content: viewer + settings side by side
+        # Main content
         content = QHBoxLayout()
-
-        # Left: Molecule viewer with view toggle
         viewer_container = QVBoxLayout()
 
-        # View toggle buttons
+        # View toggle (2D / 3D)
         view_toggle = QHBoxLayout()
         self.view_2d_btn = QPushButton(self.tr("2D Structure"))
+        self.view_2d_btn.setFont(_font())
         self.view_2d_btn.setCheckable(True)
         self.view_2d_btn.setChecked(True)
         self.view_2d_btn.clicked.connect(lambda: self._switch_view("2d"))
-        self.view_2d_btn.setStyleSheet("""
-            QPushButton {
-                padding: 8px 16px;
-                border: 1px solid #ccc;
-                border-radius: 4px 0 0 4px;
-                background: #2563eb;
-                color: white;
-                font-weight: bold;
-            }
-            QPushButton:!checked {
-                background: #f0f0f0;
-                color: #333;
-            }
-        """)
+        self.view_2d_btn.setStyleSheet(S.btn_toggle())
         view_toggle.addWidget(self.view_2d_btn)
 
         self.view_3d_btn = QPushButton(self.tr("3D Slices"))
+        self.view_3d_btn.setFont(_font())
         self.view_3d_btn.setCheckable(True)
         self.view_3d_btn.clicked.connect(lambda: self._switch_view("3d"))
-        self.view_3d_btn.setStyleSheet("""
-            QPushButton {
-                padding: 8px 16px;
-                border: 1px solid #ccc;
-                border-left: none;
-                border-radius: 0 4px 4px 0;
-                background: #f0f0f0;
-                color: #333;
-            }
-            QPushButton:checked {
-                background: #2563eb;
-                color: white;
-                font-weight: bold;
-            }
-        """)
+        self.view_3d_btn.setStyleSheet(S.btn_toggle())
         view_toggle.addWidget(self.view_3d_btn)
 
-        # Selection controls for plane definition
         view_toggle.addSpacing(20)
+
         self.clear_selection_btn = QPushButton(self.tr("Clear Selection"))
-        self.clear_selection_btn.setMaximumWidth(120)
+        self.clear_selection_btn.setFont(_font())
+        self.clear_selection_btn.setStyleSheet(S.btn_secondary())
         self.clear_selection_btn.clicked.connect(self._clear_atom_selection)
         self.clear_selection_btn.setToolTip("Clear atom selection for plane definition")
         view_toggle.addWidget(self.clear_selection_btn)
 
         self.reset_plane_btn = QPushButton(self.tr("Reset Plane"))
-        self.reset_plane_btn.setMaximumWidth(100)
+        self.reset_plane_btn.setFont(_font())
+        self.reset_plane_btn.setStyleSheet(S.btn_secondary())
         self.reset_plane_btn.clicked.connect(self._reset_slice_plane)
         self.reset_plane_btn.setToolTip("Reset to default slicing orientation")
         view_toggle.addWidget(self.reset_plane_btn)
@@ -561,202 +559,222 @@ class MainWindow(QMainWindow):
         view_toggle.addStretch()
         viewer_container.addLayout(view_toggle)
 
-        # Stacked widget for 2D/3D views
+        # Viewer stack (2D / 3D)
         self.viewer_stack = QStackedWidget()
 
-        # 2D Molecule viewer
         self.molecule_viewer = MoleculeViewer()
         self.molecule_viewer.setMinimumSize(350, 350)
         self.viewer_stack.addWidget(self.molecule_viewer)
 
-        # 3D Slice explorer
         self.slice_explorer = SliceExplorer()
         self.slice_explorer.setMinimumSize(350, 350)
         self.viewer_stack.addWidget(self.slice_explorer)
 
         viewer_container.addWidget(self.viewer_stack)
 
-        # Molecule info below viewer
+        # Molecule info
         self.mol_info_label = QLabel()
-        self.mol_info_label.setStyleSheet("color: #666;")
+        self.mol_info_label.setFont(_font())
+        self.mol_info_label.setStyleSheet(S.label_secondary())
         self.mol_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         viewer_container.addWidget(self.mol_info_label)
 
         content.addLayout(viewer_container, stretch=1)
+        layout.addLayout(content)
 
-        # Right: Settings panel (only visible in 3D view)
+        # Collapsible PDF Export section
+        self.pdf_toggle_btn = QPushButton(self.tr("PDF Export Settings  >"))
+        self.pdf_toggle_btn.setFont(_font(bold=True))
+        self.pdf_toggle_btn.setStyleSheet(S.btn_ghost())
+        self.pdf_toggle_btn.clicked.connect(self._toggle_pdf_settings)
+        self.pdf_toggle_btn.hide()
+        layout.addWidget(self.pdf_toggle_btn)
+
         self.settings_widget = QWidget()
         settings_panel = QVBoxLayout(self.settings_widget)
-        settings_panel.setSpacing(15)
-        settings_panel.setContentsMargins(0, 0, 0, 0)
+        settings_panel.setSpacing(10)
+        settings_panel.setContentsMargins(20, 0, 20, 10)
 
-        # Resolution setting
+        settings_row = QHBoxLayout()
+        settings_row.setSpacing(15)
+
+        # Resolution
         res_group = QGroupBox(self.tr("Resolution"))
+        res_group.setFont(_font(S.SIZE_SMALL, bold=True))
+        res_group.setStyleSheet(S.groupbox_style())
         res_layout = QVBoxLayout(res_group)
         self.resolution_combo = QComboBox()
+        self.resolution_combo.setFont(_font())
+        self.resolution_combo.setStyleSheet(S.combo_style())
         self.resolution_combo.addItems([
-            self.tr("Coarse (~0.2 A) - Quick preview"),
-            self.tr("Medium (~0.1 A) - Default"),
-            self.tr("Fine (~0.05 A) - High quality"),
+            self.tr("Coarse (~0.2 A)"),
+            self.tr("Medium (~0.1 A)"),
+            self.tr("Fine (~0.05 A)"),
         ])
         self.resolution_combo.setCurrentIndex(1)
         res_layout.addWidget(self.resolution_combo)
-        settings_panel.addWidget(res_group)
+        settings_row.addWidget(res_group)
 
-        # Slice settings
+        # Slices
         slice_group = QGroupBox(self.tr("Slices"))
+        slice_group.setFont(_font(S.SIZE_SMALL, bold=True))
+        slice_group.setStyleSheet(S.groupbox_style())
         slice_layout = QHBoxLayout(slice_group)
-        slice_layout.addWidget(QLabel(self.tr("Number of slices:")))
+        num_label = QLabel(self.tr("Number:"))
+        num_label.setFont(_font())
+        num_label.setStyleSheet(S.label_title())
+        slice_layout.addWidget(num_label)
         self.slice_spinbox = QSpinBox()
+        self.slice_spinbox.setFont(_font())
+        self.slice_spinbox.setStyleSheet(S.spinbox_style())
         self.slice_spinbox.setRange(5, 30)
         self.slice_spinbox.setValue(15)
         slice_layout.addWidget(self.slice_spinbox)
-        settings_panel.addWidget(slice_group)
+        settings_row.addWidget(slice_group)
 
-        # Output options
+        # Output
         output_group = QGroupBox(self.tr("Output"))
+        output_group.setFont(_font(S.SIZE_SMALL, bold=True))
+        output_group.setStyleSheet(S.groupbox_style())
         output_layout = QVBoxLayout(output_group)
-        self.promolecule_check = QCheckBox(self.tr("Promolecule density"))
+        self.promolecule_check = QCheckBox(self.tr("Promolecule"))
+        self.promolecule_check.setFont(_font())
+        self.promolecule_check.setStyleSheet(S.checkbox_style())
         self.promolecule_check.setChecked(True)
         output_layout.addWidget(self.promolecule_check)
-        self.deformation_check = QCheckBox(self.tr("Deformation density"))
+        self.deformation_check = QCheckBox(self.tr("Deformation"))
+        self.deformation_check.setFont(_font())
+        self.deformation_check.setStyleSheet(S.checkbox_style())
         self.deformation_check.setChecked(True)
         output_layout.addWidget(self.deformation_check)
-        settings_panel.addWidget(output_group)
+        settings_row.addWidget(output_group)
 
-        # Color mode
+        # Color Mode
         color_group = QGroupBox(self.tr("Color Mode"))
+        color_group.setFont(_font(S.SIZE_SMALL, bold=True))
+        color_group.setStyleSheet(S.groupbox_style())
         color_layout = QVBoxLayout(color_group)
         self.color_combo = QComboBox()
+        self.color_combo.setFont(_font())
+        self.color_combo.setStyleSheet(S.combo_style())
         self.color_combo.addItems([
             self.tr("Black & White"),
-            self.tr("Color (Blue/Red)"),
+            self.tr("Color"),
         ])
         color_layout.addWidget(self.color_combo)
-        settings_panel.addWidget(color_group)
+        settings_row.addWidget(color_group)
 
-        # Detail level
+        # Detail Level
         detail_group = QGroupBox(self.tr("Detail Level"))
+        detail_group.setFont(_font(S.SIZE_SMALL, bold=True))
+        detail_group.setStyleSheet(S.groupbox_style())
         detail_layout = QVBoxLayout(detail_group)
         self.detail_combo = QComboBox()
+        self.detail_combo.setFont(_font())
+        self.detail_combo.setStyleSheet(S.combo_style())
         self.detail_combo.addItems([
-            self.tr("Simple (for beginners)"),
-            self.tr("Advanced (shows π-bonds)"),
+            self.tr("Simple"),
+            self.tr("Advanced"),
         ])
         self.detail_combo.setCurrentIndex(0)
         detail_layout.addWidget(self.detail_combo)
-        detail_hint = QLabel(self.tr("Advanced mode uses fixed contour levels\nto reveal subtle bonding features."))
-        detail_hint.setStyleSheet("color: #888; font-size: 9pt;")
-        detail_hint.setWordWrap(True)
-        detail_layout.addWidget(detail_hint)
-        settings_panel.addWidget(detail_group)
+        settings_row.addWidget(detail_group)
 
-        settings_panel.addStretch()
+        settings_panel.addLayout(settings_row)
 
         # Generate button
+        gen_row = QHBoxLayout()
+        gen_row.addStretch()
         self.generate_btn = QPushButton(self.tr("Generate PDFs"))
-        self.generate_btn.setMinimumHeight(50)
-        self.generate_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2563eb;
-                color: white;
-                font-size: 14pt;
-                font-weight: bold;
-                border-radius: 8px;
-            }
-            QPushButton:hover {
-                background-color: #1d4ed8;
-            }
-            QPushButton:pressed {
-                background-color: #1e40af;
-            }
-        """)
+        self.generate_btn.setFont(_font(13, bold=True))
+        self.generate_btn.setStyleSheet(S.btn_primary())
         self.generate_btn.clicked.connect(self._on_generate)
-        settings_panel.addWidget(self.generate_btn)
+        gen_row.addWidget(self.generate_btn)
+        gen_row.addStretch()
+        settings_panel.addLayout(gen_row)
 
-        # Start hidden (shown when switching to 3D view)
         self.settings_widget.hide()
-        content.addWidget(self.settings_widget)
-
-        layout.addLayout(content)
+        layout.addWidget(self.settings_widget)
 
         return screen
 
+    # =========================================================================
+    # Processing Screen
+    # =========================================================================
+
     def _create_processing_screen(self) -> QWidget:
-        """Create the processing/progress screen."""
         screen = QWidget()
+        screen.setObjectName("processing_screen")
+        screen.setStyleSheet("#processing_screen { background-color: #ffffff; }")
         layout = QVBoxLayout(screen)
         layout.setContentsMargins(40, 40, 40, 40)
         layout.setSpacing(20)
 
         layout.addStretch()
 
-        # Title
         title = QLabel(self.tr("Generating..."))
-        title_font = QFont()
-        title_font.setPointSize(24)
-        title_font.setBold(True)
-        title.setFont(title_font)
+        title.setFont(_font(24, bold=True))
+        title.setStyleSheet(S.label_title())
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
 
-        # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
         self.progress_bar.setMaximum(100)
         self.progress_bar.setMinimumWidth(400)
+        self.progress_bar.setStyleSheet(S.progress_bar())
         layout.addWidget(self.progress_bar, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        # Status message
         self.progress_label = QLabel(self.tr("Starting..."))
+        self.progress_label.setFont(_font())
+        self.progress_label.setStyleSheet(S.label_secondary())
         self.progress_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.progress_label.setStyleSheet("color: #666;")
         layout.addWidget(self.progress_label)
 
         layout.addStretch()
 
         return screen
 
+    # =========================================================================
+    # Complete Screen
+    # =========================================================================
+
     def _create_complete_screen(self) -> QWidget:
-        """Create the completion screen."""
         screen = QWidget()
+        screen.setObjectName("complete_screen")
+        screen.setStyleSheet("#complete_screen { background-color: #ffffff; }")
         layout = QVBoxLayout(screen)
         layout.setContentsMargins(40, 40, 40, 40)
         layout.setSpacing(20)
 
         layout.addStretch()
 
-        # Success icon/title
         title = QLabel(self.tr("Complete!"))
-        title_font = QFont()
-        title_font.setPointSize(28)
-        title_font.setBold(True)
-        title.setFont(title_font)
+        title.setFont(_font(28, bold=True))
+        title.setStyleSheet(S.label_success())
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("color: #16a34a;")
         layout.addWidget(title)
 
-        # Summary
         self.complete_summary = QLabel()
+        self.complete_summary.setFont(_font())
+        self.complete_summary.setStyleSheet(S.label_secondary())
         self.complete_summary.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.complete_summary.setStyleSheet("font-size: 12pt; color: #666;")
         layout.addWidget(self.complete_summary)
 
         layout.addSpacing(20)
 
-        # Buttons
         button_layout = QHBoxLayout()
         button_layout.addStretch()
 
         self.open_folder_btn = QPushButton(self.tr("Open Folder"))
-        self.open_folder_btn.setMinimumHeight(40)
-        self.open_folder_btn.setMinimumWidth(120)
+        self.open_folder_btn.setFont(_font())
+        self.open_folder_btn.setStyleSheet(S.btn_secondary())
         self.open_folder_btn.clicked.connect(self._open_output_folder)
         button_layout.addWidget(self.open_folder_btn)
 
         self.new_molecule_btn = QPushButton(self.tr("New Molecule"))
-        self.new_molecule_btn.setMinimumHeight(40)
-        self.new_molecule_btn.setMinimumWidth(120)
+        self.new_molecule_btn.setFont(_font())
+        self.new_molecule_btn.setStyleSheet(S.btn_primary())
         self.new_molecule_btn.clicked.connect(self._go_home)
         button_layout.addWidget(self.new_molecule_btn)
 
@@ -767,35 +785,33 @@ class MainWindow(QMainWindow):
 
         return screen
 
+    # =========================================================================
+    # Logic (unchanged)
+    # =========================================================================
+
     def _cleanup_worker(self, worker: QThread | None) -> None:
-        """Safely cleanup a worker thread before creating a new one."""
         if worker is not None and worker.isRunning():
             worker.quit()
-            worker.wait(1000)  # Wait up to 1 second
+            worker.wait(1000)
             if worker.isRunning():
                 worker.terminate()
 
     def _on_search(self):
-        """Handle search button click."""
         search_text = self.search_input.text().strip()
         if not search_text:
             return
 
-        # Disable search while running
         self.search_button.setEnabled(False)
         self.search_input.setEnabled(False)
         self.status_label.setText(self.tr("Searching..."))
 
-        # Cleanup previous worker if running
         self._cleanup_worker(self.search_worker)
 
-        # Run search in background thread
         self.search_worker = SearchWorker(self.searcher, search_text)
         self.search_worker.finished.connect(self._on_search_complete)
         self.search_worker.start()
 
     def _on_search_complete(self, results: list[MoleculeResult], is_online: bool):
-        """Handle search completion."""
         self.search_button.setEnabled(True)
         self.search_input.setEnabled(True)
         self.status_label.setText("")
@@ -803,141 +819,105 @@ class MainWindow(QMainWindow):
         self.current_results = results
         query = self.search_input.text().strip()
 
-        # Update results title
         self.results_title.setText(self.tr(f'Results for "{query}"'))
 
-        # Update online status
         if is_online:
             self.online_status.setText(self.tr("COD Online"))
-            self.online_status.setStyleSheet("color: #2a2; font-size: 10pt;")
+            self.online_status.setStyleSheet(f"color: {S.SUCCESS};")
         else:
             self.online_status.setText(self.tr("Offline (local only)"))
-            self.online_status.setStyleSheet("color: #a52; font-size: 10pt;")
+            self.online_status.setStyleSheet(f"color: {S.ACCENT};")
 
-        # Clear previous results
         while self.results_layout.count() > 1:
             child = self.results_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
 
-        # Add new results
         if results:
             for mol in results:
                 card = self._create_molecule_card(mol)
                 self.results_layout.insertWidget(self.results_layout.count() - 1, card)
         else:
             no_results = QLabel(self.tr("No molecules found"))
+            no_results.setFont(_font())
             no_results.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            no_results.setStyleSheet("color: #888; padding: 40px;")
+            no_results.setStyleSheet(f"color: {S.TEXT_MUTED}; padding: 40px;")
             self.results_layout.insertWidget(0, no_results)
 
-        # Show results screen
         self.stacked_widget.setCurrentWidget(self.results_screen)
 
     def _create_molecule_card(self, mol: MoleculeResult) -> QWidget:
-        """Create a card widget for a molecule result."""
         card = QFrame()
         card.setFrameShape(QFrame.Shape.StyledPanel)
-        card.setStyleSheet("""
-            QFrame {
-                background: #f8f8f8;
-                border: 1px solid #ddd;
-                border-radius: 8px;
-                padding: 10px;
-            }
-            QFrame:hover {
-                background: #f0f0f0;
-                border-color: #bbb;
-            }
-        """)
+        card.setStyleSheet(S.card_style())
 
         layout = QHBoxLayout(card)
 
-        # Info section
         info = QVBoxLayout()
 
         name = QLabel(mol.name)
-        name_font = QFont()
-        name_font.setPointSize(12)
-        name_font.setBold(True)
-        name.setFont(name_font)
+        name.setFont(_font(S.SIZE_BODY, bold=True))
+        name.setStyleSheet(S.label_title())
         info.addWidget(name)
 
-        # Source badge (Local or COD ID)
         source = "Local" if mol.is_local else f"COD {mol.cod_id}"
         details = QLabel(f"{mol.formula} · {mol.atom_count} atoms · {source}")
-        details.setStyleSheet("color: #666;")
+        details.setFont(_font())
+        details.setStyleSheet(S.label_secondary())
         info.addWidget(details)
 
         if mol.space_group:
             sg = QLabel(f"Space group: {mol.space_group}")
-            sg.setStyleSheet("color: #888; font-size: 10pt;")
+            sg.setFont(_font(S.SIZE_SMALL))
+            sg.setStyleSheet(S.label_muted())
             info.addWidget(sg)
 
         layout.addLayout(info)
         layout.addStretch()
 
-        # Select button
         select_btn = QPushButton(self.tr("Select"))
-        select_btn.setMinimumWidth(80)
+        select_btn.setFont(_font())
+        select_btn.setStyleSheet(S.btn_secondary())
         select_btn.clicked.connect(lambda: self._on_select_molecule(mol))
         layout.addWidget(select_btn)
 
         return card
 
     def _on_select_molecule(self, mol: MoleculeResult):
-        """Handle molecule selection - show preview screen."""
         self.selected_molecule = mol
-
-        # Get structure data
         self.selected_structure = self.searcher.get_structure(mol)
 
-        # Update preview screen
         self.preview_title.setText(mol.name)
         self.mol_info_label.setText(
             f"{mol.formula} · {mol.atom_count} atoms · Space group: {mol.space_group}"
         )
 
-        # Show structure in viewer
         if self.selected_structure:
             self.molecule_viewer.set_structure(self.selected_structure)
-
-            # Set up selection manager for plane definition
             self._setup_selection_manager()
         else:
             self.molecule_viewer.clear()
 
-        # Clear 3D preview (will be regenerated when switching to 3D view)
         self.slice_explorer.clear()
-
-        # Reset to 2D view
         self._switch_view("2d")
-
-        # Show preview screen
         self.stacked_widget.setCurrentWidget(self.preview_screen)
 
     def _setup_selection_manager(self):
-        """Set up selection manager for the current structure."""
         if not self.selected_structure:
             return
 
         from dorothy.core.selection import SelectionManager
         import numpy as np
 
-        # Get aligned coordinates for plane calculation
         coords = self.selected_structure.get_cartesian_coords(
             align_to_principal_axes=True
         )
 
-        # Create selection manager
         self.selection_manager = SelectionManager(self)
         self.selection_manager.set_coordinates(coords)
-
-        # Connect selection signals
         self.selection_manager.selection_changed.connect(self._on_selection_changed)
         self.selection_manager.plane_defined.connect(self._on_plane_defined)
 
-        # Connect picker signals from both views
         self.molecule_viewer.canvas.atom_picked.connect(
             self.selection_manager.toggle_atom
         )
@@ -945,16 +925,13 @@ class MainWindow(QMainWindow):
             self.selection_manager.toggle_atom
         )
 
-        # Enable picking by default (can be toggled)
         self.molecule_viewer.canvas.set_pick_enabled(True)
         self.slice_explorer.canvas.set_pick_enabled(True)
 
     def _on_selection_changed(self, indices: list):
-        """Synchronize selection across views."""
         self.molecule_viewer.canvas.set_selection(indices)
         self.slice_explorer.canvas.set_selection(indices)
 
-        # Update status with 4-atom selection info
         if len(indices) == 0:
             hint = "Click 4 atoms: 3 for plane + 1 for orientation"
         elif len(indices) < 3:
@@ -964,71 +941,46 @@ class MainWindow(QMainWindow):
         else:
             hint = "Plane defined! Slices centered on selected atoms."
 
-        # Show hint in info label temporarily
         if self.selected_molecule:
             self.mol_info_label.setText(
                 f"{self.selected_molecule.formula} - {hint}"
             )
 
     def _on_plane_defined(self, plane_definition):
-        """Handle plane definition from 4 selected atoms.
-
-        When a new plane is defined, we need to recalculate the density cube
-        with the molecule rotated so the selected plane is horizontal.
-        This ensures Z-slices cut parallel to the user-selected plane.
-        """
-        # Store the plane definition
         self._current_plane_definition = plane_definition
-
-        # Clear cached densities to force recalculation
         self.slice_explorer._promolecule_cube = None
         self.slice_explorer._deformation_cube = None
         self.slice_explorer.canvas._density_cube = None
-
-        # Trigger recalculation with the new plane orientation
         if self.selected_structure:
             self._start_3d_density_calculation()
 
     def _clear_atom_selection(self):
-        """Clear current atom selection."""
         if self.selection_manager:
             self.selection_manager.clear()
 
     def _reset_slice_plane(self):
-        """Reset to default principal-axes slicing."""
         self._clear_atom_selection()
         self._current_plane_definition = None
-
-        # Clear cached densities to force recalculation with default orientation
         self.slice_explorer._promolecule_cube = None
         self.slice_explorer._deformation_cube = None
         self.slice_explorer.canvas._density_cube = None
-
-        # Trigger recalculation with default (principal axes) orientation
         if self.selected_structure:
             self._start_3d_density_calculation()
 
     def _on_generate(self):
-        """Handle generate PDFs button click."""
         if not self.selected_structure:
             QMessageBox.warning(self, "Error", "No molecule structure available.")
             return
 
-        # Check if xTB is needed and not installed
         wants_deformation = self.deformation_check.isChecked()
         if wants_deformation and not is_xtb_installed():
-            # Show install dialog
             dialog = XtbDownloadDialog(self)
             result = dialog.exec()
-
             if result == QDialog.DialogCode.Rejected:
-                # User chose to skip - disable deformation
                 self.deformation_check.setChecked(False)
             elif not is_xtb_installed():
-                # Installation not complete
                 self.deformation_check.setChecked(False)
 
-        # Ask for output directory
         default_name = self.selected_molecule.name.lower().replace(' ', '_')
         output_dir = QFileDialog.getExistingDirectory(
             self,
@@ -1041,7 +993,6 @@ class MainWindow(QMainWindow):
 
         output_path = Path(output_dir) / f"{default_name}_dorothy"
 
-        # Get settings
         resolution_idx = self.resolution_combo.currentIndex()
         resolution = ["coarse", "medium", "fine"][resolution_idx]
         detail_level = "simple" if self.detail_combo.currentIndex() == 0 else "advanced"
@@ -1055,15 +1006,12 @@ class MainWindow(QMainWindow):
             detail_level=detail_level,
         )
 
-        # Show processing screen
         self.progress_bar.setValue(0)
         self.progress_label.setText(self.tr("Starting..."))
         self.stacked_widget.setCurrentWidget(self.processing_screen)
 
-        # Cleanup previous worker if running
         self._cleanup_worker(self.generation_worker)
 
-        # Run generation in background
         self.generation_worker = GenerationWorker(
             self.selected_structure, output_path, settings
         )
@@ -1072,16 +1020,13 @@ class MainWindow(QMainWindow):
         self.generation_worker.start()
 
     def _on_generation_progress(self, message: str, percent: int):
-        """Handle generation progress updates."""
         self.progress_bar.setValue(percent)
         self.progress_label.setText(message)
 
     def _on_generation_complete(self, result: GenerationResult):
-        """Handle generation completion."""
         self.last_result = result
 
         if result.success:
-            # Update completion screen
             n_promol = len(result.promolecule_pdfs)
             n_deform = len(result.deformation_pdfs)
             total = n_promol + n_deform
@@ -1107,50 +1052,48 @@ class MainWindow(QMainWindow):
             self.stacked_widget.setCurrentWidget(self.preview_screen)
 
     def _open_output_folder(self):
-        """Open the output folder in file browser."""
         if self.last_result and self.last_result.output_dir:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.last_result.output_dir)))
 
     def _go_home(self):
-        """Return to home screen."""
         self.stacked_widget.setCurrentWidget(self.home_screen)
 
     def _go_to_results(self):
-        """Return to results screen."""
         self.stacked_widget.setCurrentWidget(self.results_screen)
 
+    def _toggle_pdf_settings(self):
+        visible = self.settings_widget.isVisible()
+        self.settings_widget.setVisible(not visible)
+        if visible:
+            self.pdf_toggle_btn.setText(self.tr("PDF Export Settings  >"))
+        else:
+            self.pdf_toggle_btn.setText(self.tr("PDF Export Settings  v"))
+
     def _switch_view(self, view: str):
-        """Switch between 2D and 3D views."""
         if view == "2d":
             self.view_2d_btn.setChecked(True)
             self.view_3d_btn.setChecked(False)
             self.viewer_stack.setCurrentWidget(self.molecule_viewer)
+            self.pdf_toggle_btn.hide()
             self.settings_widget.hide()
         else:
             self.view_2d_btn.setChecked(False)
             self.view_3d_btn.setChecked(True)
             self.viewer_stack.setCurrentWidget(self.slice_explorer)
-            self.settings_widget.show()
+            self.pdf_toggle_btn.show()
 
-            # Auto-run xTB calculation for 3D preview if not already done
             if self.selected_structure and self.slice_explorer._promolecule_cube is None:
                 self._start_3d_density_calculation()
 
     def _start_3d_density_calculation(self):
-        """Start background xTB calculation for 3D preview."""
         if not self.selected_structure:
             return
 
-        # Show progress indicator
         self.mol_info_label.setText("Calculating density...")
-
-        # Cleanup previous worker if running
         self._cleanup_worker(self.xtb_density_worker)
 
-        # Get current plane definition if any
         plane_def = getattr(self, '_current_plane_definition', None)
 
-        # Start background calculation with plane rotation
         self.xtb_density_worker = XtbDensityWorker(
             self.selected_structure,
             plane_definition=plane_def
@@ -1160,37 +1103,33 @@ class MainWindow(QMainWindow):
         self.xtb_density_worker.start()
 
     def _on_xtb_density_progress(self, message: str):
-        """Handle xTB density progress updates."""
         self.mol_info_label.setText(message)
 
-    def _on_xtb_density_complete(self, promolecule, deformation):
-        """Handle xTB density calculation completion."""
+    def _on_xtb_density_complete(self, promolecule, molecular, deformation):
         if promolecule:
             n_slices = self.slice_spinbox.value()
             self.slice_explorer.set_density_cubes(
                 promolecule=promolecule,
+                molecular=molecular,
                 deformation=deformation,
                 n_slices=n_slices
             )
 
-            # Update info label
             if deformation:
                 self.mol_info_label.setText(
                     f"{self.selected_molecule.formula} - "
-                    "Deformation density available (showing bonds)"
+                    "Molecular & deformation density available"
                 )
             else:
                 self.mol_info_label.setText(
                     f"{self.selected_molecule.formula} - "
-                    "Promolecule only (install xTB for deformation)"
+                    "Promolecule only (install xTB for molecular)"
                 )
 
     def _update_3d_preview(self):
-        """Generate density cube for 3D preview (legacy sync method)."""
         if not self.selected_structure:
             return
 
-        # Use coarse resolution for quick preview
         cube = create_density_cube_from_structure(
             self.selected_structure,
             resolution="coarse",
@@ -1205,5 +1144,4 @@ class MainWindow(QMainWindow):
         )
 
     def tr(self, text: str) -> str:
-        """Translate text using Qt's translation system."""
         return QCoreApplication.translate("MainWindow", text)

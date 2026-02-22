@@ -4,17 +4,30 @@ Dorothy - Main Application Entry Point
 
 import sys
 from pathlib import Path
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QStyleFactory
 from PyQt6.QtCore import QTranslator, QLocale, QLibraryInfo
+from PyQt6.QtGui import QFontDatabase, QFont
 from dorothy.ui.main_window import MainWindow
+from dorothy.ui.styles import FONT_FAMILY, SIZE_BODY
 
 
 def main():
     """Launch the Dorothy application."""
     app = QApplication(sys.argv)
+    app.setStyle(QStyleFactory.create("Fusion"))
     app.setApplicationName("Dorothy")
     app.setOrganizationName("Dorothy")
     app.setApplicationVersion("0.1.0")
+
+    # Load Atkinson Hyperlegible font
+    font_dir = Path(__file__).parent.parent / "font"
+    if font_dir.exists():
+        for ttf in font_dir.glob("*.ttf"):
+            QFontDatabase.addApplicationFont(str(ttf))
+
+    # Set as application-wide default font
+    app_font = QFont(FONT_FAMILY, SIZE_BODY)
+    app.setFont(app_font)
 
     # Set up translations
     translator = QTranslator()
