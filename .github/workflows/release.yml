@@ -30,7 +30,7 @@ jobs:
       - name: Package macOS app
         run: |
           cd dist
-          zip -r ../Dorothy-macOS.zip Dorothy.app
+          ditto -c -k --sequesterRsrc --keepParent Dorothy.app ../Dorothy-macOS.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

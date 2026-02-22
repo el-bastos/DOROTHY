@@ -65,6 +65,9 @@ if sys.platform == 'darwin':
         bundle_identifier='com.dorothy.app',
         info_plist={
             'CFBundleShortVersionString': '0.6.0-beta',
+            'CFBundlePackageType': 'APPL',
+            'NSPrincipalClass': 'NSApplication',
             'NSHighResolutionCapable': True,
+            'LSMinimumSystemVersion': '12.0',
         },
     )
