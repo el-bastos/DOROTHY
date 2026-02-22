@@ -307,21 +307,24 @@ def _apply_symmetry_ops(
 
 
 def _extract_molecule(
-    atoms: list['Atom'], cell: 'CellParameters', bond_tolerance: float = 1.3
+    atoms: list['Atom'], cell: 'CellParameters',
+    bond_tolerance: float = 1.3, z_units: int = 0,
 ) -> list['Atom']:
-    """Extract the largest molecule from unit cell atoms using bond connectivity.
+    """Extract one formula unit from unit cell atoms using bond connectivity.
 
     Detects bonds via covalent radii, finds connected components (considering
-    periodic boundary conditions), and returns the largest one with unwrapped
-    coordinates so the molecule is spatially contiguous.
+    periodic boundary conditions), picks the largest fragment, then merges
+    nearby counterions/solvate until the expected formula-unit size is reached.
 
     Args:
         atoms: All atoms in the unit cell
         cell: Unit cell parameters
         bond_tolerance: Multiplier for sum of covalent radii
+        z_units: Number of formula units per unit cell (from _cell_formula_units_Z).
+                 If > 0, used to determine expected atom count per formula unit.
 
     Returns:
-        Atoms of one complete molecule
+        Atoms of one complete formula unit
     """
     n = len(atoms)
     if n <= 1:
@@ -388,22 +391,81 @@ def _extract_molecule(
 
         components.append((component, offsets))
 
-    # Pick the largest connected component (the main molecule).
-    # For ionic compounds, this returns the largest ion — typically the
-    # organic cation/anion, which is the scientifically interesting part.
-    best_comp, best_offsets = max(components, key=lambda c: len(c[0]))
+    # Pick the largest connected component as the starting fragment.
+    best_idx = max(range(len(components)), key=lambda i: len(components[i][0]))
+    best_comp, best_offsets = components[best_idx]
+
+    molecule_indices = list(best_comp)
+    molecule_offsets = dict(best_offsets)
+
+    # Determine expected formula-unit size from Z.
+    # If Z is known, merge nearby fragments (counterions, solvate) until
+    # we reach the expected atom count.
+    target_size = (n // z_units) if z_units > 0 else 0
+
+    if target_size > len(molecule_indices):
+        remaining = [
+            (i, c) for i, c in enumerate(components) if i != best_idx
+        ]
+
+        # Compute Cartesian coords of the growing molecule
+        mol_frac = np.array([
+            frac_coords[idx] + molecule_offsets[idx]
+            for idx in molecule_indices
+        ])
+        mol_cart = mol_frac @ matrix.T
+
+        while remaining and len(molecule_indices) < target_size:
+            # Find the closest remaining fragment (checking 27 periodic images)
+            closest_i = None
+            closest_dist = float('inf')
+            closest_shift = np.zeros(3)
+
+            for ri, (_, (comp, comp_offs)) in enumerate(remaining):
+                comp_frac = np.array([
+                    frac_coords[idx] + comp_offs[idx] for idx in comp
+                ])
+                for dx in (-1, 0, 1):
+                    for dy in (-1, 0, 1):
+                        for dz in (-1, 0, 1):
+                            shift = np.array([dx, dy, dz], dtype=float)
+                            shifted_cart = (comp_frac + shift) @ matrix.T
+                            diffs = mol_cart[:, None, :] - shifted_cart[None, :, :]
+                            dists = np.linalg.norm(diffs, axis=2)
+                            min_d = dists.min()
+                            if min_d < closest_dist:
+                                closest_dist = min_d
+                                closest_i = ri
+                                closest_shift = shift
+
+            if closest_i is None:
+                break
+
+            # Merge the closest fragment
+            _, (comp, comp_offs) = remaining.pop(closest_i)
+            for idx in comp:
+                molecule_offsets[idx] = comp_offs[idx] + closest_shift
+            molecule_indices.extend(comp)
+
+            # Update mol_cart for next iteration
+            mol_frac = np.array([
+                frac_coords[idx] + molecule_offsets[idx]
+                for idx in molecule_indices
+            ])
+            mol_cart = mol_frac @ matrix.T
 
     logger.info(
         "Molecule extraction: %d unit-cell atoms → %d fragments, "
-        "largest has %d atoms",
-        n, len(components), len(best_comp),
+        "formula unit has %d atoms (Z=%s, target=%s)",
+        n, len(components), len(molecule_indices),
+        z_units or '?', target_size or 'largest',
     )
 
     # Build molecule with unwrapped fractional coordinates
     result = []
-    for idx in best_comp:
+    for idx in molecule_indices:
         a = atoms[idx]
-        offset = best_offsets.get(idx, np.zeros(3))
+        offset = molecule_offsets.get(idx, np.zeros(3))
         result.append(Atom(
             label=a.label,
             symbol=a.symbol,
@@ -505,6 +567,12 @@ def _parse_cif_content(content: str, name: str = "", source: str = "") -> Molecu
             structure.space_group = sg_match.group(1)
             break
 
+    # Formula units per unit cell (Z) — used for ionic compound extraction
+    z_units = 0
+    z_match = re.search(r'_cell_formula_units_Z\s+(\d+)', content)
+    if z_match:
+        z_units = int(z_match.group(1))
+
     # Cell parameters
     for param, attr in [
         ('_cell_length_a', 'a'),
@@ -595,7 +663,9 @@ def _parse_cif_content(content: str, name: str = "", source: str = "") -> Molecu
     if sym_ops and structure.atoms:
         asymmetric_count = len(structure.atoms)
         unit_cell_atoms = _apply_symmetry_ops(structure.atoms, sym_ops)
-        molecule_atoms = _extract_molecule(unit_cell_atoms, structure.cell)
+        molecule_atoms = _extract_molecule(
+            unit_cell_atoms, structure.cell, z_units=z_units,
+        )
         structure.atoms = molecule_atoms
         logger.info(
             "Symmetry: %d asymmetric → %d molecule atoms",
