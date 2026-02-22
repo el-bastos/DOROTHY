@@ -6,7 +6,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 
 ## Current Status
 
-**Version:** 0.6.0 (Development)
+**Version:** 0.7.0
 
 ### What's Working
 
@@ -226,7 +226,7 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 
 ## Changelog
 
-### v0.6.0-beta (February 2025)
+### v0.7.0 (February 2025)
 - **Symmetry Expansion**: CIF parser now applies space group symmetry operations to reconstruct complete molecules from asymmetric units, with automatic molecule extraction via bond connectivity
 - **Disorder Resolution**: Partial-occupancy atoms are grouped by element and reduced to the correct count using occupancy sums (e.g. 8 F atoms at 0.25 occupancy → keep 2 representatives), correctly reconstructing disordered structures like As2F11
 - **Extended Element Support**: Added As, Se, B, Si to element tables (colors, radii, density params)

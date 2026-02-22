@@ -64,7 +64,7 @@ if sys.platform == 'darwin':
         icon=str(base / 'logo' / 'dorothy_logo_icon.png'),
         bundle_identifier='com.dorothy.app',
         info_plist={
-            'CFBundleShortVersionString': '0.6.0-beta',
+            'CFBundleShortVersionString': '0.7.0',
             'CFBundlePackageType': 'APPL',
             'NSPrincipalClass': 'NSApplication',
             'NSHighResolutionCapable': True,

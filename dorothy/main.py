@@ -17,7 +17,7 @@ def main():
     app.setStyle(QStyleFactory.create("Fusion"))
     app.setApplicationName("Dorothy")
     app.setOrganizationName("Dorothy")
-    app.setApplicationVersion("0.6.0-beta")
+    app.setApplicationVersion("0.7.0")
 
     # Load Atkinson Hyperlegible font
     font_dir = _base_dir() / "font"

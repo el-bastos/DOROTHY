@@ -109,7 +109,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          prerelease: true
+          prerelease: false
+          make_latest: true
           generate_release_notes: true
           files: |
             artifacts/Dorothy-macOS/Dorothy-macOS.zip
