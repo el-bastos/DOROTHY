@@ -228,7 +228,7 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 
 ### v0.6.0-beta (February 2025)
 - **Symmetry Expansion**: CIF parser now applies space group symmetry operations to reconstruct complete molecules from asymmetric units, with automatic molecule extraction via bond connectivity
-- **Partial Occupancy Filtering**: Disordered atoms (occupancy < 0.5) are automatically excluded for cleaner visualization
+- **Disorder Resolution**: Partial-occupancy atoms are grouped by element and reduced to the correct count using occupancy sums (e.g. 8 F atoms at 0.25 occupancy → keep 2 representatives), correctly reconstructing disordered structures like As2F11
 - **Extended Element Support**: Added As, Se, B, Si to element tables (colors, radii, density params)
 - **Load CIF File**: New "load a CIF file" link on home screen to open any CIF file directly (e.g. from CCDC, ICSD, or custom sources)
 - **Cross-platform Builds**: Standalone executables for macOS, Windows, and Linux via PyInstaller + GitHub Actions

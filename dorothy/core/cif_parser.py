@@ -632,15 +632,12 @@ def _parse_cif_content(content: str, name: str = "", source: str = "") -> Molecu
             occ_idx = headers.index('occupancy') if 'occupancy' in headers else None
             min_col = max(label_idx, symbol_idx, x_idx, y_idx, z_idx)
 
-            skipped = 0
+            atoms_with_occ: list[tuple[Atom, float]] = []
             for row in rows:
                 if len(row) > min_col:
-                    # Skip partial-occupancy atoms (disorder)
+                    occ = 1.0
                     if occ_idx is not None and occ_idx < len(row):
                         occ = parse_cif_value(row[occ_idx])
-                        if occ < 0.5:
-                            skipped += 1
-                            continue
                     atom = Atom(
                         label=row[label_idx],
                         symbol=row[symbol_idx],
@@ -648,10 +645,28 @@ def _parse_cif_content(content: str, name: str = "", source: str = "") -> Molecu
                         y=parse_cif_value(row[y_idx]),
                         z=parse_cif_value(row[z_idx]),
                     )
-                    structure.atoms.append(atom)
+                    atoms_with_occ.append((atom, occ))
 
-            if skipped:
-                logger.info("Skipped %d partial-occupancy atoms", skipped)
+            # Resolve disorder: for partial-occupancy atoms, group by element
+            # and keep round(sum_of_occupancies) representatives per group.
+            # E.g. 8 F atoms at 0.25 occ → sum=2.0 → keep 2 representatives.
+            full_occ = [(a, o) for a, o in atoms_with_occ if o >= 0.9]
+            partial_by_element: dict[str, list[tuple[Atom, float]]] = {}
+            for a, o in atoms_with_occ:
+                if o < 0.9:
+                    partial_by_element.setdefault(a.symbol, []).append((a, o))
+
+            structure.atoms = [a for a, _ in full_occ]
+            for element, group in partial_by_element.items():
+                total_occ = sum(o for _, o in group)
+                n_keep = max(1, round(total_occ))
+                structure.atoms.extend(a for a, _ in group[:n_keep])
+                if n_keep < len(group):
+                    logger.info(
+                        "Disorder resolution: kept %d of %d %s atoms "
+                        "(total occupancy %.2f)",
+                        n_keep, len(group), element, total_occ,
+                    )
         except ValueError:
             # Required columns not found
             pass
