@@ -704,6 +704,13 @@ class HelpDialog(QDialog):
             'DOI: 10.1007/s002140000150</a>'
 
             '</p>'
+
+            # --- Citation ---
+            '<h2 style="color: {a};">Citation</h2>'
+            '<p>If you use Dorothy in your work, please cite:</p>'
+            '<p><a href="https://doi.org/10.5281/zenodo.18733780">'
+            'https://doi.org/10.5281/zenodo.18733780</a></p>'
+
             '</div>'
         ).format(f=f, a=a, s=s)
 
