@@ -33,7 +33,7 @@ from PyQt6.QtCore import QUrl
 
 from dorothy.core.cod_search import CODSearch, MoleculeResult
 from dorothy.core.cif_parser import MoleculeStructure
-from dorothy.core.xtb_manager import is_xtb_installed, download_xtb, get_download_url, get_xtb_install_instructions
+from dorothy.core.xtb_manager import is_xtb_installed, download_xtb, get_download_url, get_xtb_install_instructions, verify_xtb_installation
 from dorothy.core.density import create_density_cube_from_structure
 from dorothy.ui.molecule_viewer import MoleculeViewer
 from dorothy.ui.slice_explorer import SliceExplorer
@@ -69,15 +69,19 @@ class SearchWorker(QThread):
 
 
 class XtbDownloadWorker(QThread):
-    """Background thread for xTB download."""
+    """Background thread for xTB download and installation."""
     progress = pyqtSignal(int, int)  # downloaded, total
-    finished = pyqtSignal(bool)  # success
+    finished = pyqtSignal(bool, str)  # success, message
 
     def run(self):
         success = download_xtb(
             progress_callback=lambda downloaded, total: self.progress.emit(downloaded, total)
         )
-        self.finished.emit(success)
+        if success:
+            ok, msg = verify_xtb_installation()
+            self.finished.emit(ok, msg)
+        else:
+            self.finished.emit(False, "Download or installation failed")
 
 
 class XtbDensityWorker(QThread):
@@ -306,19 +310,27 @@ class XtbDownloadDialog(QDialog):
 
     def _on_progress(self, downloaded: int, total: int):
         if total > 0:
-            percent = int(100 * downloaded / total)
+            # Download is 80% of the progress; install+verify is the last 20%
+            percent = int(80 * downloaded / total)
             self.progress_bar.setValue(percent)
             mb_downloaded = downloaded / (1024 * 1024)
             mb_total = total / (1024 * 1024)
             self.status_label.setText(f"Downloading... {mb_downloaded:.1f} / {mb_total:.1f} MB")
+        if downloaded == total and total > 0:
+            self.progress_bar.setValue(85)
+            self.status_label.setText("Installing and verifying...")
 
-    def _on_finished(self, success: bool):
+    def _on_finished(self, success: bool, message: str = ""):
         if success:
-            self.status_label.setText("Download complete!")
+            self.status_label.setText("xTB installed and verified!")
             self.status_label.setStyleSheet(S.label_success())
             self.accept()
         else:
-            self.status_label.setText("Download failed. Please install manually.")
+            error_text = "Installation failed."
+            if message:
+                error_text += f"\n{message}"
+            error_text += "\n\nYou can install manually using the instructions above."
+            self.status_label.setText(error_text)
             self.status_label.setStyleSheet(S.label_error())
             self.download_btn.setEnabled(True)
             self.skip_btn.setEnabled(True)
@@ -719,6 +731,7 @@ class MainWindow(QMainWindow):
         self.selected_structure: MoleculeStructure | None = None
         self.selection_manager = None
         self._density_show_processing = False
+        self._xtb_offered = False  # Only show xTB install dialog once per session
 
         central_widget = QWidget()
         central_widget.setObjectName("dorothy_central")
@@ -1304,6 +1317,14 @@ class MainWindow(QMainWindow):
         """
         if not self.selected_structure:
             return
+
+        # Offer xTB installation once per session if not installed
+        if not self._xtb_offered and not is_xtb_installed():
+            self._xtb_offered = True
+            dialog = XtbDownloadDialog(self)
+            dialog.exec()
+            # Proceed regardless — promolecule will always be generated,
+            # and if the user just installed xTB, it will be picked up
 
         self._density_show_processing = show_processing
 

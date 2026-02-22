@@ -4,6 +4,7 @@ xTB download and execution manager.
 Handles automatic download of xTB binaries and running calculations.
 """
 
+import logging
 import platform
 import subprocess
 import tempfile
@@ -13,6 +14,8 @@ import tarfile
 import zipfile
 from pathlib import Path
 from typing import Optional, Callable, TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -142,9 +145,87 @@ def get_download_url() -> Optional[str]:
     return arch_map.get(machine)
 
 
+def _remove_quarantine(path: Path):
+    """Remove macOS Gatekeeper quarantine attribute from downloaded files.
+
+    On macOS, files downloaded from the internet are flagged with
+    com.apple.quarantine. Without removing this, the binary will be
+    blocked from executing.
+    """
+    if platform.system() != "Darwin":
+        return
+    try:
+        subprocess.run(
+            ["xattr", "-cr", str(path)],
+            capture_output=True, timeout=30,
+        )
+        logger.info("Removed quarantine attribute from %s", path)
+    except Exception as e:
+        logger.warning("Could not remove quarantine attribute: %s", e)
+
+
+def _make_executables(xtb_dir: Path):
+    """Set executable permission on all binaries in the xTB installation."""
+    if platform.system() == "Windows":
+        return
+    bin_dir = xtb_dir / "bin"
+    if bin_dir.is_dir():
+        for f in bin_dir.iterdir():
+            if f.is_file():
+                f.chmod(0o755)
+    # Also handle lib directory (shared libraries)
+    lib_dir = xtb_dir / "lib"
+    if lib_dir.is_dir():
+        for f in lib_dir.iterdir():
+            if f.is_file() and (f.suffix in (".so", ".dylib") or ".so." in f.name):
+                f.chmod(0o755)
+
+
+def verify_xtb_installation() -> tuple[bool, str]:
+    """Verify that xTB actually runs.
+
+    Returns:
+        (success, message) tuple. On success, message contains the version string.
+        On failure, message describes the error.
+    """
+    exe = get_xtb_executable()
+    if not exe:
+        return False, "xTB binary not found after installation"
+
+    try:
+        result = subprocess.run(
+            [str(exe), "--version"],
+            capture_output=True, text=True, timeout=15,
+        )
+        # xTB prints version info to stdout
+        output = (result.stdout + result.stderr).strip()
+        if result.returncode == 0 or "xtb" in output.lower():
+            version_line = ""
+            for line in output.splitlines():
+                if "version" in line.lower() or "xtb" in line.lower():
+                    version_line = line.strip()
+                    break
+            return True, version_line or "xTB is working"
+        else:
+            return False, f"xTB exited with code {result.returncode}: {output[:200]}"
+    except subprocess.TimeoutExpired:
+        return False, "xTB timed out during verification"
+    except PermissionError:
+        return False, "Permission denied — binary may be blocked by the OS"
+    except OSError as e:
+        return False, f"Cannot execute xTB: {e}"
+
+
 def download_xtb(progress_callback: Optional[Callable[[int, int], None]] = None) -> bool:
     """
-    Download and install xTB.
+    Download, install, and verify xTB.
+
+    Handles the full installation pipeline:
+    1. Download from GitHub Releases
+    2. Extract archive
+    3. Set executable permissions
+    4. Remove macOS quarantine attribute
+    5. Verify the binary runs
 
     Args:
         progress_callback: Optional callback(downloaded, total) for progress updates
@@ -194,19 +275,26 @@ def download_xtb(progress_callback: Optional[Callable[[int, int], None]] = None)
                 shutil.rmtree(xtb_dir)
             extracted[0].rename(xtb_dir)
 
-        # Make executable on Unix
-        if platform.system() != "Windows":
-            exe = xtb_dir / "bin" / "xtb"
-            if exe.exists():
-                exe.chmod(0o755)
+        # Set executable permissions on all binaries and libraries
+        _make_executables(xtb_dir)
 
-        # Cleanup
+        # Remove macOS quarantine (critical — without this, Gatekeeper blocks execution)
+        _remove_quarantine(xtb_dir)
+
+        # Cleanup temp file
         tmp_path.unlink()
 
-        return is_xtb_installed()
+        # Verify the binary actually runs
+        ok, msg = verify_xtb_installation()
+        if ok:
+            logger.info("xTB installed successfully: %s", msg)
+            return True
+        else:
+            logger.error("xTB installation verification failed: %s", msg)
+            return False
 
     except Exception as e:
-        print(f"Failed to download xTB: {e}")
+        logger.error("Failed to download xTB: %s", e)
         return False
 
 
