@@ -306,6 +306,87 @@ def _apply_symmetry_ops(
     return all_atoms
 
 
+def _resolve_disorder(
+    atoms_with_occ: list[tuple['Atom', float]],
+    cell: 'CellParameters',
+    sym_ops: list[np.ndarray],
+) -> list['Atom']:
+    """Select disorder representatives that are well-separated from symmetry images.
+
+    For partial-occupancy atoms, groups by element, determines how many to keep
+    (round of summed occupancy), then picks representatives that maximize the
+    minimum Cartesian distance to their own symmetry-generated copies.  A greedy
+    selection also ensures picked atoms are > 1.5 Å apart from each other so
+    they don't cluster on the same side of the molecule.
+    """
+    full_occ = [a for a, o in atoms_with_occ if o >= 0.9]
+    partial_by_element: dict[str, list[tuple['Atom', float]]] = {}
+    for a, o in atoms_with_occ:
+        if o < 0.9:
+            partial_by_element.setdefault(a.symbol, []).append((a, o))
+
+    if not partial_by_element:
+        return full_occ
+
+    matrix = cell.to_cartesian_matrix()
+    result = list(full_occ)
+
+    for element, group in partial_by_element.items():
+        total_occ = sum(o for _, o in group)
+        n_keep = max(1, round(total_occ))
+
+        if n_keep >= len(group) or not sym_ops:
+            result.extend(a for a, _ in group[:n_keep])
+            continue
+
+        # Score each candidate by its minimum distance to symmetry images.
+        scored: list[tuple[float, 'Atom']] = []
+        for atom, _ in group:
+            frac = np.array([atom.x, atom.y, atom.z])
+            min_dist = float('inf')
+            for op in sym_ops:
+                img = (op[:, :3] @ frac + op[:, 3]) % 1.0
+                diff = frac - img
+                diff -= np.round(diff)
+                cart = diff @ matrix.T
+                d = np.linalg.norm(cart)
+                if d > 0.01:
+                    min_dist = min(min_dist, d)
+            scored.append((min_dist, atom))
+
+        # Greedy pick: best min-image-distance first, skip if < 1.5 Å
+        # from any already-picked atom.
+        scored.sort(key=lambda x: -x[0])
+        picked: list['Atom'] = []
+        picked_cart: list[np.ndarray] = []
+        for dist, atom in scored:
+            if len(picked) >= n_keep:
+                break
+            cart = np.array([atom.x, atom.y, atom.z]) @ matrix.T
+            if all(np.linalg.norm(cart - pc) > 1.5 for pc in picked_cart):
+                picked.append(atom)
+                picked_cart.append(cart)
+
+        # Fallback: if greedy didn't find enough, fill from top scorers
+        if len(picked) < n_keep:
+            for _, atom in scored:
+                if atom not in picked:
+                    picked.append(atom)
+                if len(picked) >= n_keep:
+                    break
+
+        result.extend(picked)
+        if n_keep < len(group):
+            labels = [a.label for a in picked]
+            logger.info(
+                "Disorder resolution: kept %s from %d %s atoms "
+                "(total occupancy %.2f)",
+                labels, len(group), element, total_occ,
+            )
+
+    return result
+
+
 def _extract_molecule(
     atoms: list['Atom'], cell: 'CellParameters',
     bond_tolerance: float = 1.3, z_units: int = 0,
@@ -586,6 +667,8 @@ def _parse_cif_content(content: str, name: str = "", source: str = "") -> Molecu
         if match:
             setattr(structure.cell, attr, parse_cif_value(match.group(1)))
 
+    _atoms_with_occ: list[tuple[Atom, float]] = []
+
     # Parse atom sites (this is the tricky part - CIF loop format)
     # We need to find the loop_ block with fractional coordinates specifically
     # and stop before the next loop_ or before lines starting with _
@@ -647,34 +730,22 @@ def _parse_cif_content(content: str, name: str = "", source: str = "") -> Molecu
                     )
                     atoms_with_occ.append((atom, occ))
 
-            # Resolve disorder: for partial-occupancy atoms, group by element
-            # and keep round(sum_of_occupancies) representatives per group.
-            # E.g. 8 F atoms at 0.25 occ → sum=2.0 → keep 2 representatives.
-            full_occ = [(a, o) for a, o in atoms_with_occ if o >= 0.9]
-            partial_by_element: dict[str, list[tuple[Atom, float]]] = {}
-            for a, o in atoms_with_occ:
-                if o < 0.9:
-                    partial_by_element.setdefault(a.symbol, []).append((a, o))
-
-            structure.atoms = [a for a, _ in full_occ]
-            for element, group in partial_by_element.items():
-                total_occ = sum(o for _, o in group)
-                n_keep = max(1, round(total_occ))
-                structure.atoms.extend(a for a, _ in group[:n_keep])
-                if n_keep < len(group):
-                    logger.info(
-                        "Disorder resolution: kept %d of %d %s atoms "
-                        "(total occupancy %.2f)",
-                        n_keep, len(group), element, total_occ,
-                    )
+            # Store atoms with occupancy for disorder resolution after
+            # symmetry operations are parsed (needs symmetry info to pick
+            # representatives far from mirror planes / symmetry elements).
+            _atoms_with_occ = atoms_with_occ
         except ValueError:
-            # Required columns not found
-            pass
+            _atoms_with_occ = []
 
     # --- Symmetry expansion ---
-    # Apply space group symmetry to reconstruct the full unit cell,
-    # then extract one complete molecule via bond connectivity.
+    # Parse symmetry operations first (needed for disorder resolution).
     sym_ops = _parse_symmetry_ops(content)
+
+    # Resolve disorder using symmetry awareness, then expand.
+    if _atoms_with_occ:
+        structure.atoms = _resolve_disorder(
+            _atoms_with_occ, structure.cell, sym_ops,
+        )
     if sym_ops and structure.atoms:
         asymmetric_count = len(structure.atoms)
         unit_cell_atoms = _apply_symmetry_ops(structure.atoms, sym_ops)
