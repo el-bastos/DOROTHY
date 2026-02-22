@@ -2,12 +2,34 @@
 CIF (Crystallographic Information File) parser.
 
 Extracts molecular structure data from CIF files.
+Handles symmetry expansion to reconstruct complete molecules from asymmetric units.
 """
 
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 import numpy as np
+
+logger = logging.getLogger(__name__)
+
+# Covalent radii (Å) for bond detection during molecule extraction.
+# Source: Cordero et al., Dalton Trans., 2008, 2832-2838
+_COVALENT_RADII = {
+    'H': 0.31, 'He': 0.28, 'Li': 1.28, 'Be': 0.96, 'B': 0.84,
+    'C': 0.76, 'N': 0.71, 'O': 0.66, 'F': 0.57, 'Ne': 0.58,
+    'Na': 1.66, 'Mg': 1.41, 'Al': 1.21, 'Si': 1.11, 'P': 1.07,
+    'S': 1.05, 'Cl': 1.02, 'Ar': 1.06, 'K': 2.03, 'Ca': 1.76,
+    'Sc': 1.70, 'Ti': 1.60, 'V': 1.53, 'Cr': 1.39, 'Mn': 1.39,
+    'Fe': 1.32, 'Co': 1.26, 'Ni': 1.24, 'Cu': 1.32, 'Zn': 1.22,
+    'Ga': 1.22, 'Ge': 1.20, 'As': 1.19, 'Se': 1.20, 'Br': 1.20,
+    'Rb': 2.20, 'Sr': 1.95, 'Zr': 1.75, 'Mo': 1.54, 'Ru': 1.46,
+    'Rh': 1.42, 'Pd': 1.39, 'Ag': 1.45, 'Cd': 1.44, 'In': 1.42,
+    'Sn': 1.39, 'Sb': 1.39, 'Te': 1.38, 'I': 1.39, 'Cs': 2.44,
+    'Ba': 2.15, 'La': 2.07, 'Pt': 1.36, 'Au': 1.36, 'Hg': 1.32,
+    'Tl': 1.45, 'Pb': 1.46, 'Bi': 1.48,
+}
+_DEFAULT_COVALENT_RADIUS = 1.5
 
 
 @dataclass
@@ -137,6 +159,262 @@ class MoleculeStructure:
         return [a.symbol for a in self.atoms]
 
 
+def _parse_symop_component(expr: str) -> dict:
+    """Parse one component of a symmetry operation (e.g., '-x+1/2').
+
+    Returns dict with 'x', 'y', 'z' coefficients and 'c' constant.
+    Example: '-x+1/2' → {'x': -1.0, 'y': 0.0, 'z': 0.0, 'c': 0.5}
+    """
+    result = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'c': 0.0}
+    expr = expr.strip().replace(' ', '')
+
+    tokens = re.findall(r'[+-]?[^+-]+', expr)
+
+    for token in tokens:
+        token = token.strip()
+        if not token:
+            continue
+
+        found_var = False
+        for var in ('x', 'y', 'z'):
+            if var in token:
+                coeff_str = token.replace(var, '')
+                if coeff_str in ('', '+'):
+                    result[var] = 1.0
+                elif coeff_str == '-':
+                    result[var] = -1.0
+                else:
+                    result[var] = float(coeff_str)
+                found_var = True
+                break
+
+        if not found_var:
+            # Constant term (number or fraction)
+            if '/' in token:
+                num, den = token.split('/')
+                result['c'] += float(num) / float(den)
+            else:
+                result['c'] += float(token)
+
+    return result
+
+
+def _parse_symmetry_ops(content: str) -> list[np.ndarray]:
+    """Parse symmetry operations from CIF content.
+
+    Looks for _space_group_symop_operation_xyz or _symmetry_equiv_pos_as_xyz.
+
+    Returns list of 3×4 numpy arrays: [[Rx, Ry, Rz, T], ...] per operation.
+    """
+    for tag in ('_space_group_symop_operation_xyz', '_symmetry_equiv_pos_as_xyz'):
+        if tag not in content:
+            continue
+
+        tag_pos = content.index(tag)
+        remaining = content[tag_pos:]
+
+        ops = []
+        for line in remaining.split('\n')[1:]:  # skip the header line
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith('_') or stripped.startswith('loop_'):
+                break
+
+            # Extract quoted operation string, or use whole line
+            op_match = re.search(r"'([^']+)'|\"([^\"]+)\"", stripped)
+            if op_match:
+                op_str = op_match.group(1) or op_match.group(2)
+            else:
+                op_str = stripped
+                # Skip leading numeric ID if present (e.g., "1 x, y, z")
+                op_str = re.sub(r'^\d+\s+', '', op_str)
+
+            components = [c.strip() for c in op_str.split(',')]
+            if len(components) != 3:
+                continue
+
+            # Verify it looks like a symmetry operation
+            if not any(v in ''.join(components) for v in ('x', 'y', 'z')):
+                continue
+
+            try:
+                parsed = [_parse_symop_component(c) for c in components]
+                matrix = np.array([
+                    [p['x'], p['y'], p['z'], p['c']] for p in parsed
+                ])
+                ops.append(matrix)
+            except (ValueError, KeyError):
+                continue
+
+        if ops:
+            logger.info("Parsed %d symmetry operations", len(ops))
+            return ops
+
+    return []
+
+
+def _apply_symmetry_ops(
+    atoms: list['Atom'], sym_ops: list[np.ndarray], tolerance: float = 0.02
+) -> list['Atom']:
+    """Apply symmetry operations to expand asymmetric unit to full unit cell.
+
+    Args:
+        atoms: Asymmetric unit atoms
+        sym_ops: List of 3×4 affine transformation matrices
+        tolerance: Fractional-coordinate distance for duplicate removal
+
+    Returns:
+        All unique atoms in the unit cell
+    """
+    if not sym_ops:
+        return list(atoms)
+
+    all_atoms: list['Atom'] = []
+    all_frac: list[np.ndarray] = []
+
+    for atom in atoms:
+        frac = np.array([atom.x, atom.y, atom.z])
+
+        for op in sym_ops:
+            new_frac = op[:, :3] @ frac + op[:, 3]
+            new_frac = new_frac % 1.0
+
+            # Deduplicate (same position within tolerance)
+            is_dup = False
+            for existing_frac in all_frac:
+                diff = existing_frac - new_frac
+                diff = diff - np.round(diff)  # periodic distance
+                if np.linalg.norm(diff) < tolerance:
+                    is_dup = True
+                    break
+
+            if not is_dup:
+                all_atoms.append(Atom(
+                    label=atom.label,
+                    symbol=atom.symbol,
+                    x=new_frac[0],
+                    y=new_frac[1],
+                    z=new_frac[2],
+                ))
+                all_frac.append(new_frac)
+
+    logger.info(
+        "Symmetry expansion: %d asymmetric → %d unit cell atoms",
+        len(atoms), len(all_atoms),
+    )
+    return all_atoms
+
+
+def _extract_molecule(
+    atoms: list['Atom'], cell: 'CellParameters', bond_tolerance: float = 1.3
+) -> list['Atom']:
+    """Extract the largest molecule from unit cell atoms using bond connectivity.
+
+    Detects bonds via covalent radii, finds connected components (considering
+    periodic boundary conditions), and returns the largest one with unwrapped
+    coordinates so the molecule is spatially contiguous.
+
+    Args:
+        atoms: All atoms in the unit cell
+        cell: Unit cell parameters
+        bond_tolerance: Multiplier for sum of covalent radii
+
+    Returns:
+        Atoms of one complete molecule
+    """
+    n = len(atoms)
+    if n <= 1:
+        return atoms
+
+    matrix = cell.to_cartesian_matrix()
+    frac_coords = np.array([[a.x, a.y, a.z] for a in atoms])
+    cart_coords = frac_coords @ matrix.T
+
+    radii = [_COVALENT_RADII.get(a.symbol, _DEFAULT_COVALENT_RADIUS) for a in atoms]
+
+    # Build adjacency considering periodic images (27 cells)
+    adjacency: list[set[int]] = [set() for _ in range(n)]
+    bond_offsets: dict[tuple[int, int], np.ndarray] = {}
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            max_dist = (radii[i] + radii[j]) * bond_tolerance
+            best_dist = float('inf')
+            best_offset = None
+
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for dz in (-1, 0, 1):
+                        offset = np.array([dx, dy, dz], dtype=float)
+                        shifted_cart = (frac_coords[j] + offset) @ matrix.T
+                        dist = np.linalg.norm(cart_coords[i] - shifted_cart)
+                        if 0.4 < dist < max_dist and dist < best_dist:
+                            best_dist = dist
+                            best_offset = offset
+
+            if best_offset is not None:
+                adjacency[i].add(j)
+                adjacency[j].add(i)
+                bond_offsets[(i, j)] = best_offset
+                bond_offsets[(j, i)] = -best_offset
+
+    # BFS to find connected components, tracking offsets for unwrapping
+    visited = [False] * n
+    components: list[tuple[list[int], dict[int, np.ndarray]]] = []
+
+    for start in range(n):
+        if visited[start]:
+            continue
+        component: list[int] = []
+        offsets: dict[int, np.ndarray] = {start: np.zeros(3)}
+        queue = [start]
+        visited[start] = True
+
+        while queue:
+            current = queue.pop(0)
+            component.append(current)
+
+            for neighbor in adjacency[current]:
+                if not visited[neighbor]:
+                    visited[neighbor] = True
+                    queue.append(neighbor)
+                    if (current, neighbor) in bond_offsets:
+                        offsets[neighbor] = (
+                            offsets[current] + bond_offsets[(current, neighbor)]
+                        )
+                    else:
+                        offsets[neighbor] = offsets[current].copy()
+
+        components.append((component, offsets))
+
+    # Pick the largest connected component (the main molecule).
+    # For ionic compounds, this returns the largest ion — typically the
+    # organic cation/anion, which is the scientifically interesting part.
+    best_comp, best_offsets = max(components, key=lambda c: len(c[0]))
+
+    logger.info(
+        "Molecule extraction: %d unit-cell atoms → %d fragments, "
+        "largest has %d atoms",
+        n, len(components), len(best_comp),
+    )
+
+    # Build molecule with unwrapped fractional coordinates
+    result = []
+    for idx in best_comp:
+        a = atoms[idx]
+        offset = best_offsets.get(idx, np.zeros(3))
+        result.append(Atom(
+            label=a.label,
+            symbol=a.symbol,
+            x=a.x + offset[0],
+            y=a.y + offset[1],
+            z=a.z + offset[2],
+        ))
+
+    return result
+
+
 def parse_cif_value(value: str) -> float:
     """Parse a CIF numeric value, handling uncertainties like '11.233(3)'."""
     if not value or value == '?':
@@ -215,12 +493,17 @@ def _parse_cif_content(content: str, name: str = "", source: str = "") -> Molecu
     if formula_match:
         structure.formula = formula_match.group(1)
 
-    # Space group can be quoted (e.g., 'P 1 21/c 1') or unquoted
-    sg_match = re.search(r"_symmetry_space_group_name_H-M\s+'([^']+)'", content)
-    if not sg_match:
-        sg_match = re.search(r'_symmetry_space_group_name_H-M\s+(\S+)', content)
-    if sg_match:
-        structure.space_group = sg_match.group(1)
+    # Space group — try multiple CIF tags (older and newer conventions)
+    for sg_tag in (
+        r'_symmetry_space_group_name_H-M',
+        r'_space_group_name_H-M_alt',
+    ):
+        sg_match = re.search(rf"{sg_tag}\s+'([^']+)'", content)
+        if not sg_match:
+            sg_match = re.search(rf'{sg_tag}\s+(\S+)', content)
+        if sg_match:
+            structure.space_group = sg_match.group(1)
+            break
 
     # Cell parameters
     for param, attr in [
@@ -278,9 +561,18 @@ def _parse_cif_content(content: str, name: str = "", source: str = "") -> Molecu
             x_idx = headers.index('fract_x')
             y_idx = headers.index('fract_y')
             z_idx = headers.index('fract_z')
+            occ_idx = headers.index('occupancy') if 'occupancy' in headers else None
+            min_col = max(label_idx, symbol_idx, x_idx, y_idx, z_idx)
 
+            skipped = 0
             for row in rows:
-                if len(row) > max(label_idx, symbol_idx, x_idx, y_idx, z_idx):
+                if len(row) > min_col:
+                    # Skip partial-occupancy atoms (disorder)
+                    if occ_idx is not None and occ_idx < len(row):
+                        occ = parse_cif_value(row[occ_idx])
+                        if occ < 0.5:
+                            skipped += 1
+                            continue
                     atom = Atom(
                         label=row[label_idx],
                         symbol=row[symbol_idx],
@@ -289,9 +581,26 @@ def _parse_cif_content(content: str, name: str = "", source: str = "") -> Molecu
                         z=parse_cif_value(row[z_idx]),
                     )
                     structure.atoms.append(atom)
+
+            if skipped:
+                logger.info("Skipped %d partial-occupancy atoms", skipped)
         except ValueError:
             # Required columns not found
             pass
+
+    # --- Symmetry expansion ---
+    # Apply space group symmetry to reconstruct the full unit cell,
+    # then extract one complete molecule via bond connectivity.
+    sym_ops = _parse_symmetry_ops(content)
+    if sym_ops and structure.atoms:
+        asymmetric_count = len(structure.atoms)
+        unit_cell_atoms = _apply_symmetry_ops(structure.atoms, sym_ops)
+        molecule_atoms = _extract_molecule(unit_cell_atoms, structure.cell)
+        structure.atoms = molecule_atoms
+        logger.info(
+            "Symmetry: %d asymmetric → %d molecule atoms",
+            asymmetric_count, len(molecule_atoms),
+        )
 
     return structure
 
