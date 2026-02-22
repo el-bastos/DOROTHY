@@ -896,6 +896,22 @@ class MainWindow(QMainWindow):
 
         layout.addSpacing(12)
 
+        # "or load a CIF file" link
+        load_row = QHBoxLayout()
+        load_row.addStretch(1)
+        load_link = QLabel(self.tr(
+            f'or <a href="#" style="color: {S.ACCENT};">load a CIF file</a>'
+        ))
+        load_link.setFont(_font(S.SIZE_SUBTITLE))
+        load_link.setStyleSheet(f"color: {S.TEXT_SECONDARY};")
+        load_link.setTextFormat(Qt.TextFormat.RichText)
+        load_link.linkActivated.connect(self._on_load_cif)
+        load_row.addWidget(load_link)
+        load_row.addStretch(1)
+        layout.addLayout(load_row)
+
+        layout.addSpacing(4)
+
         # Status label (shows "Searching..." etc.)
         self.status_label = QLabel("")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1127,6 +1143,58 @@ class MainWindow(QMainWindow):
     def _show_help(self):
         dialog = HelpDialog(self)
         dialog.exec()
+
+    def _on_load_cif(self, _link=None):
+        filepath, _ = QFileDialog.getOpenFileName(
+            self,
+            self.tr("Open CIF file"),
+            "",
+            self.tr("CIF files (*.cif);;All files (*)"),
+        )
+        if not filepath:
+            return
+
+        try:
+            from dorothy.core.cif_parser import parse_cif
+            structure = parse_cif(filepath)
+
+            # Derive a display name from the filename
+            name = Path(filepath).stem
+            structure.name = name
+
+            mol = MoleculeResult(
+                cod_id="",
+                name=name,
+                formula=structure.formula,
+                atom_count=structure.atom_count,
+                space_group=structure.space_group,
+                is_local=True,
+                cif_path=filepath,
+            )
+            self._on_select_molecule_direct(mol, structure)
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                self.tr("Error loading CIF"),
+                self.tr("Could not parse the CIF file:\n\n") + str(e),
+            )
+
+    def _on_select_molecule_direct(self, mol: MoleculeResult, structure: MoleculeStructure):
+        """Select a molecule with an already-parsed structure (used by Load CIF)."""
+        self.selected_molecule = mol
+        self.selected_structure = structure
+
+        self.preview_title.setText(mol.name)
+        self.mol_info_label.setText(
+            f"{mol.formula} · {mol.atom_count} atoms · Space group: {mol.space_group}"
+        )
+
+        self.molecule_viewer.set_structure(self.selected_structure)
+        self._setup_selection_manager()
+
+        self.slice_explorer.clear()
+        self._switch_view("2d")
+        self.stacked_widget.setCurrentWidget(self.preview_screen)
 
     def _on_search(self):
         search_text = self.search_input.text().strip()

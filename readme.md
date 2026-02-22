@@ -11,7 +11,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 ### What's Working
 
 - **PyQt6 Desktop Application** - Native UI with Fusion style, design system
-- **Molecule Search** - Local CIF files + COD online (with fallback)
+- **Molecule Search** - Local CIF files + COD online (with fallback) + load any CIF file
 - **CIF Parser** - Extracts atomic coordinates, cell parameters, space groups
 - **2D Molecule Viewer** - Bond detection, CPK coloring, interactive atom selection, 3D rotation
 - **3D Slice Explorer** - Interactive 3D preview with zoom, bonds, and custom orientation
@@ -31,7 +31,6 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 ### What's Not Yet Complete
 
 - Settings persistence
-- App packaging (PyInstaller/cx_Freeze)
 
 ---
 
@@ -226,6 +225,12 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 ---
 
 ## Changelog
+
+### v0.6.0-beta (February 2025)
+- **Load CIF File**: New "load a CIF file" link on home screen to open any CIF file directly (e.g. from CCDC, ICSD, or custom sources)
+- **Cross-platform Builds**: Standalone executables for macOS, Windows, and Linux via PyInstaller + GitHub Actions
+- **xTB Download Fixes**: Corrected download URLs for Windows, removed non-existent macOS binaries
+- **Citation**: Added Zenodo DOI citation to help dialog and readme
 
 ### v0.6.0 (February 2025)
 - **WYSIWYG Viewer**: 3D viewer controls now match PDF export settings — what you see is what you get
