@@ -26,17 +26,15 @@ if TYPE_CHECKING:
 
 
 # xTB release info
+# NOTE: GitHub releases do NOT include macOS binaries for any version.
+# macOS users must install via Homebrew or conda (see get_xtb_install_instructions).
 XTB_VERSION = "6.7.1"
 XTB_RELEASES = {
-    "Darwin": {
-        "arm64": f"https://github.com/grimme-lab/xtb/releases/download/v{XTB_VERSION}/xtb-{XTB_VERSION}-macos-arm64.tar.xz",
-        "x86_64": f"https://github.com/grimme-lab/xtb/releases/download/v{XTB_VERSION}/xtb-{XTB_VERSION}-macos-x86_64.tar.xz",
-    },
     "Linux": {
         "x86_64": f"https://github.com/grimme-lab/xtb/releases/download/v{XTB_VERSION}/xtb-{XTB_VERSION}-linux-x86_64.tar.xz",
     },
     "Windows": {
-        "AMD64": f"https://github.com/grimme-lab/xtb/releases/download/v{XTB_VERSION}/xtb-{XTB_VERSION}-windows-x86_64.zip",
+        "AMD64": f"https://github.com/grimme-lab/xtb/releases/download/v{XTB_VERSION}/xtb-{XTB_VERSION}pre-windows-x86_64.zip",
     },
 }
 
@@ -241,12 +239,13 @@ def download_xtb(progress_callback: Optional[Callable[[int, int], None]] = None)
 
     try:
         # Download to temp file
-        response = requests.get(url, stream=True, timeout=60)
+        response = requests.get(url, stream=True, timeout=(15, 300))
         response.raise_for_status()
 
         total_size = int(response.headers.get('content-length', 0))
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.tar.xz') as tmp:
+        suffix = '.zip' if url.endswith('.zip') else '.tar.xz'
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             downloaded = 0
             for chunk in response.iter_content(chunk_size=8192):
                 tmp.write(chunk)

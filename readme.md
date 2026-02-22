@@ -207,6 +207,12 @@ In a teaching context, this reversal is powerful: students see the electron dens
 
 ---
 
+## Citation
+
+If you use Dorothy in your work, please cite:
+
+> https://doi.org/10.5281/zenodo.18733780
+
 ## License
 
 GPL-3.0 — see [LICENSE](LICENSE)
