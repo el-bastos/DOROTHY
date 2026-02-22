@@ -1,6 +1,6 @@
 [project]
 name = "dorothy"
-version = "0.7.0"
+version = "0.7.1"
 description = "Crystallography teaching tool for visualizing electron density - honoring Dorothy Hodgkin"
 authors = [
     {name = "Your Name", email = "your.email@example.com"}
