@@ -236,14 +236,13 @@ class MoleculeCanvas(FigureCanvas):
         return bonds
 
     def _on_click(self, event):
-        """Handle mouse click for atom picking or start rotation drag."""
+        """Handle mouse click: left = atom picking, right = rotation drag."""
         if event.inaxes != self.ax:
             return
 
-        # Left button: atom picking if enabled, otherwise start rotation
+        # Left button: atom picking only
         if event.button == 1:
             if self._pick_enabled and self._atom_positions:
-                # Try atom picking first
                 click_x, click_y = event.x, event.y
                 min_dist = float('inf')
                 closest_idx = -1
@@ -257,9 +256,10 @@ class MoleculeCanvas(FigureCanvas):
 
                 if closest_idx >= 0 and min_dist < 25:
                     self.atom_picked.emit(closest_idx)
-                    return
+            return
 
-            # Start rotation drag
+        # Right button: start rotation drag
+        if event.button == 3:
             self._dragging = True
             self._last_mouse_pos = (event.x, event.y)
 

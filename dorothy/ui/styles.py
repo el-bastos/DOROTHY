@@ -129,6 +129,37 @@ def btn_toggle() -> str:
     """
 
 
+def btn_toolbar() -> str:
+    """Compact uniform toolbar button. Works for regular and checkable buttons."""
+    return f"""
+        QPushButton {{
+            background-color: white;
+            color: {TEXT};
+            border: 1px solid {BORDER};
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-size: {SIZE_SMALL}pt;
+            font-family: "{FONT_FAMILY}";
+        }}
+        QPushButton:hover {{
+            background-color: {BG_CARD};
+            border-color: {BORDER_FOCUS};
+        }}
+        QPushButton:pressed {{
+            background-color: {BG_HOVER};
+        }}
+        QPushButton:checked {{
+            background-color: {ACCENT};
+            color: white;
+            border-color: {ACCENT};
+        }}
+        QPushButton:checked:hover {{
+            background-color: {ACCENT_HOVER};
+            border-color: {ACCENT_HOVER};
+        }}
+    """
+
+
 def btn_icon() -> str:
     """Small square button for +/- zoom, arrows."""
     return f"""
