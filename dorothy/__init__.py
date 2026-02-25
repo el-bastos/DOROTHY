@@ -7,7 +7,7 @@ Honoring Dorothy Hodgkin's pioneering work in X-ray crystallography.
 import sys
 from pathlib import Path
 
-__version__ = "0.7.1"
+__version__ = "0.8.0"
 __author__ = "Your Name"
 
 

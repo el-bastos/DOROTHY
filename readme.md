@@ -6,7 +6,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 
 ## Current Status
 
-**Version:** 0.7.0
+**Version:** 0.8.0
 
 ### What's Working
 
@@ -14,7 +14,7 @@ Dorothy recreates historical electron density contour maps as a hands-on teachin
 - **Molecule Search** - Local CIF files + COD online (with fallback) + load any CIF file
 - **CIF Parser** - Extracts atomic coordinates, cell parameters, space groups, symmetry expansion
 - **2D Molecule Viewer** - Bond detection, CPK coloring, interactive atom selection, 3D rotation
-- **3D Slice Explorer** - Interactive 3D preview with zoom, bonds, and custom orientation
+- **3D Slice Explorer** - Interactive 3D preview with side panel controls, zoom/magnification, bonds, and custom orientation
 - **Interactive Plane Selection** - Click 4 atoms to define custom slicing plane (3 for plane + 1 for orientation)
 - **Measurement Tool** - Click atoms to measure distances (2), angles (3), and dihedrals (4)
 - **Auto xTB on 3D View** - Automatically calculates deformation density when switching to 3D
@@ -225,6 +225,20 @@ xTB is LGPL-3.0 (downloaded separately, not bundled)
 ---
 
 ## Changelog
+
+### v0.8.0 (February 2025)
+- **Side Panel Controls**: Replaced cramped bottom toolbar with a right-side vertical panel (220px) with grouped sections: Density, Display, Slices, View, Actions
+- **Zoom + Magnification**: Separate zoom (axis limits, +/- buttons) and magnification (camera distance, scroll wheel) for precise 3D navigation
+- **View Stability**: Changing slices, toggling options, or using any control no longer resets the 3D view orientation — rotation, zoom, and magnification are fully preserved
+- **Contour Alignment Fix**: Contour maxima now correctly center on atom positions (fixed X/Y extent calculation)
+- **Proportional Box Aspect**: 3D box dimensions are now proportional to real crystallographic axes instead of forced cubic, preventing visual distortion
+- **Mouse Controls**: Right-click to rotate in both 2D and 3D viewers, left-click reserved for atom picking
+- **Deformation Legend**: Accumulation/depletion color legend moved to side panel for clearer placement
+- **Uniform Button Styling**: All toolbar buttons use consistent `btn_toolbar()` design system style with proper checked state
+- **Slice Navigation**: Replaced slider with compact spinbox (1-indexed) next to slice count for intuitive navigation
+
+### v0.7.1 (February 2025)
+- **Disorder Fix**: Pick representative atoms far from symmetry elements for better disorder resolution
 
 ### v0.7.0 (February 2025)
 - **Symmetry Expansion**: CIF parser now applies space group symmetry operations to reconstruct complete molecules from asymmetric units, with automatic molecule extraction via bond connectivity
